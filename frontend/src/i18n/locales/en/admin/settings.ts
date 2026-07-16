@@ -432,6 +432,22 @@ export default {
         backendMode: 'Backend Mode',
         backendModeDescription:
           'Disables user registration, public site, and self-service features. Only admin can log in and manage the platform.',
+        
+        uiStylesTitle: 'UI Theme Styles',
+        uiStylesDescription: 'Switch among ten visual themes in the admin console. Changes apply instantly and never touch core business logic.',
+        uiStyleActive: 'Active',
+        uiStyles: {
+          classic: { name: 'Classic Default', description: 'Official teal classic style with a clean baseline.' },
+          ink: { name: 'Ink Qingyun', description: 'Paper-and-ink greens with misty brush motion.' },
+          ocean: { name: 'Summer Ocean', description: 'Clear blue ocean tones with soft wave motion.' },
+          aurora: { name: 'Aurora Violet', description: 'Violet-cyan aurora with flowing light.' },
+          sunset: { name: 'Sunset Ember', description: 'Warm orange gold with ember breathing light.' },
+          forest: { name: 'Pine Forest', description: 'Deep greens with gentle leaf-like motion.' },
+          rose: { name: 'Rose Bloom', description: 'Rose magenta glow with blooming soft pulses.' },
+          midnight: { name: 'Midnight Orbit', description: 'Deep indigo neon with night-orbit shimmer.' },
+          citrus: { name: 'Citrus Lime', description: 'Bright yellow-green with sparkling accents.' },
+          slate: { name: 'Slate Control', description: 'Cool slate gray with precise grid motion.' }
+        },
         siteName: 'Site Name',
         siteNamePlaceholder: 'Sub2API',
         siteNameHint: 'Displayed in emails and page titles',

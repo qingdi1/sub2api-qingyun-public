@@ -426,6 +426,22 @@ export default {
         backendMode: 'Backend 模式',
         backendModeDescription:
           '禁用用户注册、公开页面和自助服务功能。仅管理员可以登录和管理平台。',
+        
+        uiStylesTitle: '界面主题风格',
+        uiStylesDescription: '在管理员控制台切换十种视觉主题。切换即时生效，不影响业务数据与核心功能。',
+        uiStyleActive: '当前',
+        uiStyles: {
+          classic: { name: '经典默认', description: '官方青绿经典风格，稳定清晰。' },
+          ink: { name: '水墨青云', description: '宣纸青绿水墨，带笔触与雾气动效。' },
+          ocean: { name: '夏日海蓝', description: '清透海蓝主色，波浪光影流动。' },
+          aurora: { name: '极光紫雾', description: '紫青极光交织，冷调流光动效。' },
+          sunset: { name: '落日熔金', description: '橙金暖调，余晖明暗呼吸。' },
+          forest: { name: '松风翠谷', description: '森绿主色，轻叶浮动氛围。' },
+          rose: { name: '绯霞玫瑰', description: '玫红柔光，花瓣般扩散动效。' },
+          midnight: { name: '午夜星轨', description: '深蓝紫霓虹，夜间星轨闪烁。' },
+          citrus: { name: '青柠柑橘', description: '明快黄绿，清爽跳跃光点。' },
+          slate: { name: '岩灰智控', description: '冷静岩灰，精密网格动效。' }
+        },
         siteName: '站点名称',
         siteNameHint: '显示在邮件和页面标题中',
         siteNamePlaceholder: 'Sub2API',

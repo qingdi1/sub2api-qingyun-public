@@ -5,6 +5,8 @@ import router from './router'
 import i18n, { initI18n } from './i18n'
 import { useAppStore } from '@/stores/app'
 import './style.css'
+import './themes/ui-styles.css'
+import { applyUiStyle, readStoredUiStyle } from './themes/catalog'
 
 function initThemeClass() {
   const savedTheme = localStorage.getItem('theme')
@@ -12,6 +14,7 @@ function initThemeClass() {
     savedTheme === 'dark' ||
     (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
   document.documentElement.classList.toggle('dark', shouldUseDark)
+  applyUiStyle(readStoredUiStyle())
 }
 
 async function bootstrap() {

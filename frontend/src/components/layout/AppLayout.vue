@@ -1,6 +1,6 @@
 <template>
-  <div class="min-h-screen bg-gray-50 dark:bg-dark-950">
-    <!-- Background Decoration -->
+  <div class="ui-theme-shell min-h-screen bg-gray-50 dark:bg-dark-950">
+    <!-- Background Decorations -->
     <div class="pointer-events-none fixed inset-0 bg-mesh-gradient"></div>
 
     <!-- Sidebar -->
@@ -29,6 +29,7 @@ import { useAppStore } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 import { useOnboardingTour } from '@/composables/useOnboardingTour'
 import { useOnboardingStore } from '@/stores/onboarding'
+import { applyUiStyle, readStoredUiStyle } from '@/themes/catalog'
 import AppSidebar from './AppSidebar.vue'
 import AppHeader from './AppHeader.vue'
 
@@ -45,6 +46,7 @@ const { replayTour } = useOnboardingTour({
 const onboardingStore = useOnboardingStore()
 
 onMounted(() => {
+  applyUiStyle(readStoredUiStyle())
   onboardingStore.setReplayCallback(replayTour)
 })
 

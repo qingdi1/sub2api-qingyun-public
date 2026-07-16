@@ -5158,6 +5158,48 @@
               </p>
             </div>
             <div class="space-y-6 p-6">
+              <!-- UI Theme Styles -->
+              <div class="rounded-xl border border-gray-100 p-4 dark:border-dark-700">
+                <div class="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <h3 class="text-sm font-medium text-gray-900 dark:text-white">
+                      {{ t('admin.settings.site.uiStylesTitle') }}
+                    </h3>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t('admin.settings.site.uiStylesDescription') }}
+                    </p>
+                  </div>
+                  <span class="rounded-full bg-primary-50 px-2.5 py-1 text-xs font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">
+                    {{ t(`admin.settings.site.uiStyles.${selectedUiStyle}.name`) }}
+                  </span>
+                </div>
+                <div class="ui-style-grid">
+                  <button
+                    v-for="style in uiStyles"
+                    :key="style.id"
+                    type="button"
+                    class="ui-style-card"
+                    :class="{ 'is-active': selectedUiStyle === style.id }"
+                    :style="{
+                      '--swatch-primary': style.primary,
+                      '--swatch-accent': style.accent
+                    }"
+                    @click="selectUiStyle(style.id)"
+                  >
+                    <span v-if="selectedUiStyle === style.id" class="ui-style-card__badge">
+                      {{ t('admin.settings.site.uiStyleActive') }}
+                    </span>
+                    <div class="ui-style-card__swatch"></div>
+                    <div class="ui-style-card__title">
+                      {{ t(`admin.settings.site.uiStyles.${style.id}.name`) }}
+                    </div>
+                    <div class="ui-style-card__desc">
+                      {{ t(`admin.settings.site.uiStyles.${style.id}.description`) }}
+                    </div>
+                  </button>
+                </div>
+              </div>
+
               <!-- Backend Mode -->
               <div
                 class="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20"
@@ -7471,6 +7513,8 @@
 </template>
 
 <script setup lang="ts">
+import { UI_STYLES, applyUiStyle, readStoredUiStyle, type UiStyleId } from '@/themes/catalog'
+
 import { ref, reactive, computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminAPI } from "@/api";
@@ -7569,6 +7613,14 @@ type SettingsTab =
   | "email"
   | "backup";
 const activeTab = ref<SettingsTab>("general");
+
+const uiStyles = UI_STYLES
+const selectedUiStyle = ref<UiStyleId>(readStoredUiStyle())
+
+function selectUiStyle(id: UiStyleId): void {
+  selectedUiStyle.value = applyUiStyle(id)
+}
+
 const settingsTabs = [
   { key: "general" as SettingsTab, icon: "home" as const },
   { key: "agreement" as SettingsTab, icon: "document" as const },
@@ -10751,6 +10803,8 @@ async function handleDeleteProvider() {
 }
 
 onMounted(() => {
+  applyUiStyle(selectedUiStyle.value)
+
   loadSettings();
   loadSubscriptionGroups();
   loadAdminApiKey();

@@ -1,0 +1,430 @@
+/* Runtime UI style system for Qingyun multi-theme console */
+:root {
+  --ui-primary: #14b8a6;
+  --ui-accent: #64748b;
+  --ui-surface: #f8fafc;
+  --ui-surface-strong: #ffffff;
+  --ui-text: #0f172a;
+  --ui-mesh-a: rgba(20, 184, 166, 0.12);
+  --ui-mesh-b: rgba(6, 182, 212, 0.08);
+  --ui-mesh-c: rgba(20, 184, 166, 0.08);
+  --ui-glow: rgba(20, 184, 166, 0.28);
+  --ui-effect: soft-fade;
+  --ui-transition: 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+body {
+  transition:
+    background-color var(--ui-transition),
+    color var(--ui-transition);
+}
+
+.bg-mesh-gradient {
+  background:
+    radial-gradient(at 40% 20%, var(--ui-mesh-a) 0px, transparent 50%),
+    radial-gradient(at 80% 0%, var(--ui-mesh-b) 0px, transparent 50%),
+    radial-gradient(at 0% 50%, var(--ui-mesh-c) 0px, transparent 50%) !important;
+  transition: opacity var(--ui-transition), filter var(--ui-transition);
+}
+
+.ui-theme-shell {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  transition: background-color var(--ui-transition), color var(--ui-transition);
+}
+
+.ui-theme-shell::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.55;
+  background:
+    radial-gradient(circle at 20% 15%, var(--ui-mesh-a), transparent 42%),
+    radial-gradient(circle at 80% 0%, var(--ui-mesh-b), transparent 36%);
+  animation: ui-ambient-breathe 12s ease-in-out infinite;
+}
+
+.ui-theme-shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+.ui-theme-shell main {
+  animation: ui-panel-rise 0.42s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.card,
+.glass-card,
+.btn,
+.input,
+.sidebar-link,
+.table-wrapper,
+.modal-content,
+.dialog-container {
+  transition:
+    background-color var(--ui-transition),
+    border-color var(--ui-transition),
+    color var(--ui-transition),
+    box-shadow var(--ui-transition),
+    transform var(--ui-transition),
+    filter var(--ui-transition) !important;
+}
+
+.btn-primary {
+  background-image: linear-gradient(
+    135deg,
+    var(--ui-primary),
+    color-mix(in srgb, var(--ui-primary) 72%, #0f172a)
+  ) !important;
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--ui-primary) 28%, transparent) !important;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.04);
+  transform: translateY(-1px);
+}
+
+.sidebar-link-active,
+.badge-primary {
+  color: var(--ui-primary) !important;
+}
+
+.sidebar-link-active {
+  border-left-color: var(--ui-primary) !important;
+  background: color-mix(in srgb, var(--ui-primary) 12%, transparent) !important;
+}
+
+.stat-card {
+  border-top-color: var(--ui-primary) !important;
+}
+
+.ui-style-grid {
+  display: grid;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+@media (min-width: 768px) {
+  .ui-style-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1100px) {
+  .ui-style-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+.ui-style-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgb(226 232 240 / 0.9);
+  border-radius: 1rem;
+  background: var(--ui-surface-strong);
+  text-align: left;
+  padding: 0.9rem;
+  min-height: 8.5rem;
+  transition:
+    transform 220ms ease,
+    box-shadow 220ms ease,
+    border-color 220ms ease;
+}
+
+.dark .ui-style-card {
+  border-color: rgb(51 65 85 / 0.9);
+  background: rgb(15 23 42 / 0.72);
+}
+
+.ui-style-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 14px 30px color-mix(in srgb, var(--ui-primary) 18%, transparent);
+}
+
+.ui-style-card.is-active {
+  border-color: var(--ui-primary);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--ui-primary) 28%, transparent),
+    0 16px 28px color-mix(in srgb, var(--ui-primary) 18%, transparent);
+}
+
+.ui-style-card__swatch {
+  height: 2.6rem;
+  border-radius: 0.75rem;
+  margin-bottom: 0.7rem;
+  background:
+    linear-gradient(135deg, var(--swatch-primary), var(--swatch-accent)),
+    radial-gradient(
+      circle at 80% 20%,
+      color-mix(in srgb, var(--swatch-accent) 40%, white),
+      transparent 55%
+    );
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.25);
+  position: relative;
+  overflow: hidden;
+}
+
+.ui-style-card__swatch::after {
+  content: '';
+  position: absolute;
+  inset: auto -20% -40% auto;
+  width: 4rem;
+  height: 4rem;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.24);
+  filter: blur(2px);
+  animation: ui-swatch-pulse 2.8s ease-in-out infinite;
+}
+
+.ui-style-card__title {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: inherit;
+}
+
+.ui-style-card__desc {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: rgb(100 116 139);
+}
+
+.dark .ui-style-card__desc {
+  color: rgb(148 163 184);
+}
+
+.ui-style-card__badge {
+  position: absolute;
+  top: 0.7rem;
+  right: 0.7rem;
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: white;
+  background: var(--ui-primary);
+}
+
+html[data-ui-style='ink'] .ui-theme-shell::before {
+  background:
+    repeating-linear-gradient(0deg, rgba(62, 55, 43, 0.03) 0 1px, transparent 1px 5px),
+    radial-gradient(circle at 15% 20%, var(--ui-mesh-a), transparent 40%),
+    radial-gradient(circle at 85% 10%, var(--ui-mesh-b), transparent 36%);
+  animation: ui-ink-drift 18s ease-in-out infinite;
+}
+
+html[data-ui-style='ocean'] .ui-theme-shell::before {
+  background:
+    radial-gradient(ellipse at 20% 80%, rgba(14, 165, 233, 0.16), transparent 40%),
+    radial-gradient(ellipse at 80% 20%, rgba(2, 132, 199, 0.14), transparent 42%),
+    linear-gradient(180deg, rgba(224, 242, 254, 0.35), transparent 55%);
+  animation: ui-wave 10s ease-in-out infinite;
+}
+
+html[data-ui-style='aurora'] .ui-theme-shell::before {
+  background:
+    linear-gradient(120deg, rgba(124, 58, 237, 0.16), transparent 40%),
+    linear-gradient(300deg, rgba(34, 211, 238, 0.14), transparent 45%),
+    radial-gradient(circle at 50% 0%, rgba(167, 139, 250, 0.18), transparent 50%);
+  filter: saturate(1.15);
+  animation: ui-aurora 14s linear infinite;
+}
+
+html[data-ui-style='sunset'] .ui-theme-shell::before {
+  background:
+    radial-gradient(circle at 70% 10%, rgba(251, 146, 60, 0.22), transparent 36%),
+    radial-gradient(circle at 20% 90%, rgba(234, 88, 12, 0.14), transparent 42%);
+  animation: ui-ember 11s ease-in-out infinite;
+}
+
+html[data-ui-style='forest'] .ui-theme-shell::before {
+  background:
+    radial-gradient(circle at 15% 20%, rgba(21, 128, 61, 0.14), transparent 40%),
+    radial-gradient(circle at 85% 75%, rgba(132, 204, 22, 0.12), transparent 42%);
+  animation: ui-leaf 16s ease-in-out infinite;
+}
+
+html[data-ui-style='rose'] .ui-theme-shell::before {
+  background:
+    radial-gradient(circle at 25% 15%, rgba(244, 114, 182, 0.18), transparent 38%),
+    radial-gradient(circle at 80% 80%, rgba(251, 113, 133, 0.12), transparent 42%);
+  animation: ui-bloom 12s ease-in-out infinite;
+}
+
+html[data-ui-style='midnight'] body,
+html[data-ui-style='midnight'] .ui-theme-shell {
+  background: #0b1020;
+  color: #e2e8f0;
+}
+
+html[data-ui-style='midnight'] .ui-theme-shell::before {
+  background:
+    radial-gradient(circle at 20% 20%, rgba(99, 102, 241, 0.22), transparent 35%),
+    radial-gradient(circle at 80% 10%, rgba(168, 85, 247, 0.16), transparent 35%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.2), transparent 60%);
+  animation: ui-neon 8s ease-in-out infinite;
+}
+
+html[data-ui-style='citrus'] .ui-theme-shell::before {
+  background:
+    radial-gradient(circle at 18% 18%, rgba(250, 204, 21, 0.18), transparent 40%),
+    radial-gradient(circle at 82% 70%, rgba(34, 197, 94, 0.12), transparent 42%);
+  animation: ui-spark 9s ease-in-out infinite;
+}
+
+html[data-ui-style='slate'] .ui-theme-shell::before {
+  background:
+    linear-gradient(90deg, rgba(51, 65, 85, 0.05) 1px, transparent 1px) 0 0 / 28px 28px,
+    linear-gradient(0deg, rgba(51, 65, 85, 0.05) 1px, transparent 1px) 0 0 / 28px 28px,
+    radial-gradient(circle at 80% 10%, rgba(14, 165, 233, 0.12), transparent 40%);
+  animation: ui-grid 18s linear infinite;
+}
+
+@keyframes ui-ambient-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.03);
+  }
+}
+
+@keyframes ui-panel-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ui-swatch-pulse {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+    opacity: 0.55;
+  }
+  50% {
+    transform: translate(-10%, -8%) scale(1.15);
+    opacity: 0.85;
+  }
+}
+
+@keyframes ui-ink-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(1.5%, -1%, 0);
+  }
+}
+
+@keyframes ui-wave {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1.2%);
+  }
+}
+
+@keyframes ui-aurora {
+  0% {
+    filter: hue-rotate(0deg) saturate(1.1);
+  }
+  50% {
+    filter: hue-rotate(18deg) saturate(1.25);
+  }
+  100% {
+    filter: hue-rotate(0deg) saturate(1.1);
+  }
+}
+
+@keyframes ui-ember {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.78;
+  }
+}
+
+@keyframes ui-leaf {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(1%, -0.8%, 0) rotate(0.4deg);
+  }
+}
+
+@keyframes ui-bloom {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.03);
+  }
+}
+
+@keyframes ui-neon {
+  0%,
+  100% {
+    opacity: 0.55;
+    filter: brightness(1);
+  }
+  50% {
+    opacity: 0.85;
+    filter: brightness(1.15);
+  }
+}
+
+@keyframes ui-spark {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+@keyframes ui-grid {
+  0% {
+    background-position: 0 0, 0 0, 0 0;
+  }
+  100% {
+    background-position: 28px 28px, 28px 28px, 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-theme-shell::before,
+  .ui-style-card__swatch::after,
+  .ui-theme-shell main {
+    animation: none !important;
+  }
+
+  .card,
+  .glass-card,
+  .btn,
+  .input,
+  .sidebar-link,
+  .ui-style-card {
+    transition: none !important;
+  }
+}

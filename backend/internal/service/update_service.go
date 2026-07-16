@@ -30,11 +30,13 @@ var (
 const (
 	updateCacheKey = "update_check_cache"
 	updateCacheTTL = 1200 // 20 minutes
-	githubRepo     = "Wei-Shaw/sub2api"
+	githubRepo     = "qingdi1/sub2api-qingyun"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"
 	allowedAssetHost    = "objects.githubusercontent.com"
+	allowedGHCRHost     = "ghcr.io"
+	allowedPkgHost      = "pkg-containers.githubusercontent.com"
 
 	// Security: max download size (500MB)
 	maxDownloadSize = 500 * 1024 * 1024
@@ -457,11 +459,15 @@ func validateDownloadURL(rawURL string) error {
 
 	// Check against allowed hosts
 	host := parsedURL.Host
-	// GitHub release URLs can be from github.com or objects.githubusercontent.com
+	// Trusted sources: GitHub releases, GitHub assets, and our GHCR package endpoints.
 	if host != allowedDownloadHost &&
 		!strings.HasSuffix(host, "."+allowedDownloadHost) &&
 		host != allowedAssetHost &&
-		!strings.HasSuffix(host, "."+allowedAssetHost) {
+		!strings.HasSuffix(host, "."+allowedAssetHost) &&
+		host != allowedGHCRHost &&
+		!strings.HasSuffix(host, "."+allowedGHCRHost) &&
+		host != allowedPkgHost &&
+		!strings.HasSuffix(host, "."+allowedPkgHost) {
 		return fmt.Errorf("download from untrusted host: %s", host)
 	}
 
