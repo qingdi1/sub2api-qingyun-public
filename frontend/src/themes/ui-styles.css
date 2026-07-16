@@ -47,8 +47,8 @@ body {
   animation: ui-ambient-breathe 12s ease-in-out infinite;
 }
 
-.ui-theme-shell > * {
-  position: relative;
+/* Keep ambient layer behind content without breaking fixed sidebar/header. */
+.ui-theme-shell > *:not(.bg-mesh-gradient) {
   z-index: 1;
 }
 
