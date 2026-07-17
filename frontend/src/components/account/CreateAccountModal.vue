@@ -4531,6 +4531,7 @@ const endpointWhitelistOptionsForAccount = (payload: CreateAccountRequest): Acco
   // its custom upstream switch is explicitly enabled.
   validateCredentialsBaseUrl:
     payload.type === 'apikey' ||
+    payload.type === 'upstream' ||
     (payload.platform === 'grok' && grokOAuthCustomBaseUrlEnabled.value),
   validateCustomBaseUrl: true
 })

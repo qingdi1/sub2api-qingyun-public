@@ -139,13 +139,9 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
   beforeEach(() => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({
-        version: 2,
-        endpoints: [
-          'https://api.qinggekeji.top/v1',
-          'http://47.107.127.143:8888/v1',
-          'http://8.134.222.190:8888/v1',
-          'http://192.140.188.165:8888/v1'
-        ]
+        version: 3,
+        domains: ['*.qinggekeji.top'],
+        ips: ['47.107.127.143', '8.134.222.190', '192.140.188.165']
       }), { status: 200 })
     )
     createAccountMock.mockReset().mockResolvedValue({})
