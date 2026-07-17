@@ -421,13 +421,14 @@ export default {
       addMethod: 'Add Method',
       setupTokenLongLived: 'Setup Token (Long-lived)',
       baseUrl: 'Base URL',
-      baseUrlHint: 'Leave default for official Anthropic API',
+      baseUrlRequired: 'Base URL *',
+      baseUrlHint: 'Enter a complete endpoint from the repository whitelist',
       apiKeyRequired: 'API Key *',
       apiKeyPlaceholder: 'sk-ant-api03-...',
       apiKeyHint: 'Your Claude Console API Key',
       // OpenAI specific hints
       openai: {
-        baseUrlHint: 'Leave default for official OpenAI API',
+        baseUrlHint: 'Enter a complete endpoint from the repository whitelist',
         apiKeyHint: 'Your OpenAI API Key',
         oauthPassthrough: 'Auto passthrough (auth only)',
         oauthPassthroughDesc:
@@ -752,11 +753,12 @@ export default {
       accountUpdated: 'Account updated successfully',
       failedToCreate: 'Failed to create account',
       domainWhitelist: {
-        loadFailed: 'Could not load the account endpoint domain whitelist. Account creation was blocked.',
-        invalidConfig: 'The account endpoint domain whitelist is invalid. Account creation was blocked.',
+        endpointNotAllowed: 'The account endpoint is not on the whitelist: {endpoint}',
+        endpointRequired: 'Enter an account endpoint from the whitelist.',
+        endpointPlaceholder: 'For example: https://api.qinggekeji.top/v1',
+        loadFailed: 'Could not load the account endpoint whitelist. Account creation was blocked.',
+        invalidConfig: 'The account endpoint whitelist is invalid. Account creation was blocked.',
         invalidUrl: 'The account endpoint is not a valid URL: {endpoint}',
-        httpsRequired: 'The account endpoint must use HTTPS: {endpoint}',
-        domainNotAllowed: 'The account endpoint domain is not allowed: {hostname}'
       },
       failedToUpdate: 'Failed to update account',
       pleaseSelectStatus: 'Please select a valid account status',

@@ -8,35 +8,51 @@ import {
 } from '../accountDomainWhitelist'
 
 const whitelist: AccountDomainWhitelist = {
-  version: 1,
-  domains: [
-    { hostname: 'api.openai.com' },
-    { hostname: 'api.x.ai', include_subdomains: true }
+  version: 2,
+  endpoints: [
+    'https://api.qinggekeji.top/v1',
+    'http://47.107.127.143:8888/v1',
+    'http://8.134.222.190:8888/v1',
+    'http://192.140.188.165:8888/v1'
   ]
 }
 
-describe('account domain whitelist', () => {
+describe('account endpoint whitelist', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('allows exact hosts and explicitly enabled subdomains', () => {
-    expect(() => validateAccountEndpoint('https://api.openai.com/v1', whitelist)).not.toThrow()
-    expect(() => validateAccountEndpoint('https://us-east-1.api.x.ai/v1', whitelist)).not.toThrow()
+  it('allows each exact endpoint and a trailing slash', () => {
+    for (const endpoint of whitelist.endpoints) {
+      expect(() => validateAccountEndpoint(endpoint, whitelist)).not.toThrow()
+      expect(() => validateAccountEndpoint(`${endpoint}/`, whitelist)).not.toThrow()
+    }
   })
 
-  it('does not treat an exact-only host as a suffix wildcard', () => {
-    expect(() => validateAccountEndpoint('https://relay.api.openai.com/v1', whitelist)).toThrowError(
-      expect.objectContaining({ code: 'domain_not_allowed' })
+  it('requires the exact protocol, host, port, and /v1 path', () => {
+    expect(() => validateAccountEndpoint('https://api.qinggekeji.top/v2', whitelist)).toThrowError(
+      expect.objectContaining({ code: 'endpoint_not_allowed' })
+    )
+    expect(() => validateAccountEndpoint('http://47.107.127.143/v1', whitelist)).toThrowError(
+      expect.objectContaining({ code: 'endpoint_not_allowed' })
+    )
+    expect(() => validateAccountEndpoint('http://47.107.127.143:8888/v1/models', whitelist)).toThrowError(
+      expect.objectContaining({ code: 'endpoint_not_allowed' })
     )
   })
 
-  it('rejects suffix lookalikes and non-HTTPS URLs', () => {
-    expect(() => validateAccountEndpoint('https://api.openai.com.evil.example/v1', whitelist)).toThrowError(
-      expect.objectContaining({ code: 'domain_not_allowed' })
-    )
-    expect(() => validateAccountEndpoint('http://api.openai.com/v1', whitelist)).toThrowError(
-      expect.objectContaining({ code: 'https_required' })
+  it('rejects query strings, fragments, credentials, and lookalikes', () => {
+    for (const endpoint of [
+      'https://api.qinggekeji.top/v1?tenant=test',
+      'https://api.qinggekeji.top/v1#fragment',
+      'https://user:pass@api.qinggekeji.top/v1'
+    ]) {
+      expect(() => validateAccountEndpoint(endpoint, whitelist)).toThrowError(
+        expect.objectContaining({ code: 'invalid_url' })
+      )
+    }
+    expect(() => validateAccountEndpoint('https://api.qinggekeji.top.evil.example/v1', whitelist)).toThrowError(
+      expect.objectContaining({ code: 'endpoint_not_allowed' })
     )
   })
 
@@ -45,13 +61,7 @@ describe('account domain whitelist', () => {
       new Response(JSON.stringify(whitelist), { status: 200 })
     )
 
-    await expect(fetchAccountDomainWhitelist()).resolves.toEqual({
-      version: 1,
-      domains: [
-        { hostname: 'api.openai.com', include_subdomains: false },
-        { hostname: 'api.x.ai', include_subdomains: true }
-      ]
-    })
+    await expect(fetchAccountDomainWhitelist()).resolves.toEqual(whitelist)
     expect(fetchMock).toHaveBeenCalledWith('/account-domain-whitelist.json', { cache: 'no-store' })
   })
 
@@ -60,30 +70,34 @@ describe('account domain whitelist', () => {
       new Response(JSON.stringify(whitelist), { status: 200 })
     )
 
-    await validateAccountPayloadEndpoints({ credentials: { base_url: 'https://api.openai.com/v1' } })
-    await validateAccountPayloadEndpoints({ extra: { custom_base_url: 'https://us-east-1.api.x.ai/v1' } })
+    await validateAccountPayloadEndpoints({ credentials: { base_url: 'http://47.107.127.143:8888/v1' } })
+    await validateAccountPayloadEndpoints({ extra: { custom_base_url: 'https://api.qinggekeji.top/v1' } })
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('can skip fixed OAuth credentials while still validating custom extras', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(whitelist), { status: 200 })
+    )
+
+    await expect(validateAccountPayloadEndpoints(
+      {
+        credentials: { base_url: 'https://cli-chat-proxy.grok.com/v1' },
+        extra: { custom_base_url: 'http://8.134.222.190:8888/v1' }
+      },
+      { validateCredentialsBaseUrl: false }
+    )).resolves.toBeUndefined()
   })
 
   it('blocks creation when the whitelist cannot be loaded', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 404 }))
 
     await expect(
-      validateAccountPayloadEndpoints({ credentials: { base_url: 'https://api.openai.com/v1' } })
+      validateAccountPayloadEndpoints({ credentials: { base_url: 'http://47.107.127.143:8888/v1' } })
     ).rejects.toEqual(expect.objectContaining({
       code: 'load_failed',
       name: AccountDomainWhitelistError.name
     }))
-  })
-
-  it('still fetches for account types without a configurable endpoint', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify(whitelist), { status: 200 })
-    )
-
-    await validateAccountPayloadEndpoints({ credentials: { api_key: 'secret' }, extra: {} })
-
-    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

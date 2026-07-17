@@ -526,13 +526,14 @@ export default {
       addMethod: '添加方式',
       setupTokenLongLived: 'Setup Token（长期有效）',
       baseUrl: 'Base URL',
-      baseUrlHint: '留空使用官方 Anthropic API',
+      baseUrlRequired: 'Base URL *',
+      baseUrlHint: '必须填写仓库白名单中的完整接口地址',
       apiKeyRequired: 'API Key *',
       apiKeyPlaceholder: 'sk-ant-api03-...',
       apiKeyHint: '您的 Claude Console API Key',
       // OpenAI specific hints
       openai: {
-        baseUrlHint: '留空使用官方 OpenAI API',
+        baseUrlHint: '必须填写仓库白名单中的完整接口地址',
         apiKeyHint: '您的 OpenAI API Key',
         oauthPassthrough: '自动透传（仅替换认证）',
         oauthPassthroughDesc:
@@ -845,11 +846,12 @@ export default {
       accountUpdated: '账号更新成功',
       failedToCreate: '创建账号失败',
       domainWhitelist: {
-        loadFailed: '无法加载账号接口域名白名单，已阻止创建账号。',
-        invalidConfig: '账号接口域名白名单配置无效，已阻止创建账号。',
+        endpointNotAllowed: '账号接口地址不在白名单内：{endpoint}',
+        endpointRequired: '请填写白名单中的账号接口地址。',
+        endpointPlaceholder: '例如：https://api.qinggekeji.top/v1',
+        loadFailed: '无法加载账号接口地址白名单，已阻止创建账号。',
+        invalidConfig: '账号接口地址白名单配置无效，已阻止创建账号。',
         invalidUrl: '账号接口地址不是有效的 URL：{endpoint}',
-        httpsRequired: '账号接口地址必须使用 HTTPS：{endpoint}',
-        domainNotAllowed: '账号接口域名不在白名单内：{hostname}'
       },
       failedToUpdate: '更新账号失败',
       pleaseSelectStatus: '请选择有效的账号状态',

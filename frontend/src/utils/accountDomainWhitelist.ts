@@ -1,19 +1,18 @@
-export interface AccountDomainWhitelistEntry {
-  hostname: string
-  include_subdomains?: boolean
+export interface AccountDomainWhitelist {
+  version: 2
+  endpoints: string[]
 }
 
-export interface AccountDomainWhitelist {
-  version: number
-  domains: AccountDomainWhitelistEntry[]
+export interface AccountDomainWhitelistValidationOptions {
+  validateCredentialsBaseUrl?: boolean
+  validateCustomBaseUrl?: boolean
 }
 
 export type AccountDomainWhitelistErrorCode =
   | 'load_failed'
   | 'invalid_config'
   | 'invalid_url'
-  | 'https_required'
-  | 'domain_not_allowed'
+  | 'endpoint_not_allowed'
 
 export class AccountDomainWhitelistError extends Error {
   constructor(
@@ -26,7 +25,27 @@ export class AccountDomainWhitelistError extends Error {
   }
 }
 
-const normalizeHostname = (hostname: string) => hostname.trim().toLowerCase().replace(/\.$/, '')
+const normalizeEndpoint = (endpoint: string, code: 'invalid_config' | 'invalid_url'): string => {
+  let url: URL
+  try {
+    url = new URL(endpoint.trim())
+  } catch {
+    throw new AccountDomainWhitelistError(code, endpoint)
+  }
+
+  if (
+    !['http:', 'https:'].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new AccountDomainWhitelistError(code, endpoint, url.hostname)
+  }
+
+  const pathname = url.pathname.replace(/\/+$/, '') || '/'
+  return `${url.protocol}//${url.host}${pathname === '/' ? '' : pathname}`
+}
 
 const parseWhitelist = (value: unknown): AccountDomainWhitelist => {
   if (!value || typeof value !== 'object') {
@@ -34,25 +53,29 @@ const parseWhitelist = (value: unknown): AccountDomainWhitelist => {
   }
 
   const candidate = value as Partial<AccountDomainWhitelist>
-  if (candidate.version !== 1 || !Array.isArray(candidate.domains) || candidate.domains.length === 0) {
+  if (candidate.version !== 2 || !Array.isArray(candidate.endpoints) || candidate.endpoints.length === 0) {
     throw new AccountDomainWhitelistError('invalid_config')
   }
 
-  const domains = candidate.domains.map((entry) => {
-    if (!entry || typeof entry.hostname !== 'string') {
+  const endpoints = candidate.endpoints.map((entry) => {
+    if (typeof entry !== 'string' || !entry.trim()) {
       throw new AccountDomainWhitelistError('invalid_config')
     }
-    const hostname = normalizeHostname(entry.hostname)
-    if (!hostname || hostname.includes('/') || hostname.includes(':') || hostname.startsWith('.')) {
+    try {
+      return normalizeEndpoint(entry, 'invalid_config')
+    } catch (error) {
+      if (error instanceof AccountDomainWhitelistError) {
+        throw error
+      }
       throw new AccountDomainWhitelistError('invalid_config')
-    }
-    return {
-      hostname,
-      include_subdomains: entry.include_subdomains === true
     }
   })
 
-  return { version: 1, domains }
+  if (new Set(endpoints).size !== endpoints.length) {
+    throw new AccountDomainWhitelistError('invalid_config')
+  }
+
+  return { version: 2, endpoints }
 }
 
 export const fetchAccountDomainWhitelist = async (): Promise<AccountDomainWhitelist> => {
@@ -81,40 +104,37 @@ export const validateAccountEndpoint = (
   endpoint: string,
   whitelist: AccountDomainWhitelist
 ): void => {
-  let url: URL
+  let normalized: string
   try {
-    url = new URL(endpoint)
-  } catch {
+    normalized = normalizeEndpoint(endpoint, 'invalid_url')
+  } catch (error) {
+    if (error instanceof AccountDomainWhitelistError) {
+      throw error
+    }
     throw new AccountDomainWhitelistError('invalid_url', endpoint)
   }
 
-  if (url.protocol !== 'https:') {
-    throw new AccountDomainWhitelistError('https_required', endpoint, url.hostname)
-  }
-
-  const hostname = normalizeHostname(url.hostname)
-  const allowed = whitelist.domains.some((entry) => {
-    const allowedHostname = normalizeHostname(entry.hostname)
-    return hostname === allowedHostname || (
-      entry.include_subdomains === true && hostname.endsWith(`.${allowedHostname}`)
-    )
-  })
-
-  if (!allowed) {
-    throw new AccountDomainWhitelistError('domain_not_allowed', endpoint, hostname)
+  if (!whitelist.endpoints.includes(normalized)) {
+    throw new AccountDomainWhitelistError('endpoint_not_allowed', endpoint, normalized)
   }
 }
 
-interface AccountEndpointPayload {
+export interface AccountEndpointPayload {
   credentials?: Record<string, unknown>
   extra?: Record<string, unknown>
 }
 
 export const validateAccountPayloadEndpoints = async (
-  payload: AccountEndpointPayload
+  payload: AccountEndpointPayload,
+  options: AccountDomainWhitelistValidationOptions = {}
 ): Promise<void> => {
   const whitelist = await fetchAccountDomainWhitelist()
-  const endpoints = [payload.credentials?.base_url, payload.extra?.custom_base_url]
+  const checkCredentialsBaseUrl = options.validateCredentialsBaseUrl !== false
+  const checkCustomBaseUrl = options.validateCustomBaseUrl !== false
+  const endpoints = [
+    checkCredentialsBaseUrl ? payload.credentials?.base_url : undefined,
+    checkCustomBaseUrl ? payload.extra?.custom_base_url : undefined
+  ]
     .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
     .map((value) => value.trim())
 

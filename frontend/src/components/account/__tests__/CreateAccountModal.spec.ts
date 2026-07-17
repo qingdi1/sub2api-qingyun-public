@@ -115,6 +115,7 @@ async function submitApiKeyAccount(platform: 'openai' | 'anthropic', enableLongC
     await selectButtonByText(wrapper, 'API Key')
   }
   await wrapper.get('form#create-account-form input[type="text"]').setValue(`${platform} account`)
+  await wrapper.findAll('form#create-account-form input[type="text"]')[1].setValue('https://api.qinggekeji.top/v1')
   await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
   if (enableLongContextBilling) {
     await wrapper.get('[data-testid="openai-long-context-billing-toggle"]').trigger('click')
@@ -138,10 +139,12 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
   beforeEach(() => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({
-        version: 1,
-        domains: [
-          { hostname: 'api.anthropic.com' },
-          { hostname: 'api.openai.com' }
+        version: 2,
+        endpoints: [
+          'https://api.qinggekeji.top/v1',
+          'http://47.107.127.143:8888/v1',
+          'http://8.134.222.190:8888/v1',
+          'http://192.140.188.165:8888/v1'
         ]
       }), { status: 200 })
     )

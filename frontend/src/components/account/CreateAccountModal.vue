@@ -1101,20 +1101,13 @@
       <!-- API Key input (only for apikey type, excluding Antigravity which has its own fields) -->
       <div v-if="form.type === 'apikey' && form.platform !== 'antigravity'" class="space-y-4">
         <div>
-          <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
+          <label class="input-label">{{ t('admin.accounts.baseUrlRequired') }}</label>
           <input
             v-model="apiKeyBaseUrl"
             type="text"
+            required
             class="input"
-            :placeholder="
-              form.platform === 'openai'
-                ? 'https://api.openai.com'
-                : form.platform === 'gemini'
-                  ? 'https://generativelanguage.googleapis.com'
-                  : form.platform === 'grok'
-                    ? 'https://api.x.ai/v1'
-                    : 'https://api.anthropic.com'
-            "
+            :placeholder="t('admin.accounts.domainWhitelist.endpointPlaceholder')"
           />
           <p v-if="baseUrlHint" class="input-hint">{{ baseUrlHint }}</p>
           <GrokBaseUrlPresets
@@ -3539,7 +3532,9 @@ import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/forma
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import {
   AccountDomainWhitelistError,
-  validateAccountPayloadEndpoints
+  validateAccountPayloadEndpoints,
+  type AccountEndpointPayload,
+  type AccountDomainWhitelistValidationOptions
 } from '@/utils/accountDomainWhitelist'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
@@ -3670,7 +3665,7 @@ const step = ref(1)
 const submitting = ref(false)
 const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_account'>('oauth-based') // UI selection for account category
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
-const apiKeyBaseUrl = ref('https://api.anthropic.com')
+const apiKeyBaseUrl = ref('')
 const apiKeyValue = ref('')
 
 const syncPreviewCredentials = computed(() => {
@@ -4157,15 +4152,8 @@ watch(
 watch(
   () => form.platform,
   (newPlatform) => {
-    // Reset base URL based on platform
-    apiKeyBaseUrl.value =
-      (newPlatform === 'openai')
-        ? 'https://api.openai.com'
-        : newPlatform === 'gemini'
-          ? 'https://generativelanguage.googleapis.com'
-          : newPlatform === 'grok'
-            ? 'https://api.x.ai/v1'
-            : 'https://api.anthropic.com'
+    // Qingyun API-key accounts must explicitly choose a repository-whitelisted endpoint.
+    apiKeyBaseUrl.value = ''
     // Clear model-related settings
     allowedModels.value = []
     modelMappings.value = []
@@ -4532,22 +4520,37 @@ const formatAccountDomainWhitelistError = (error: AccountDomainWhitelistError): 
       return t('admin.accounts.domainWhitelist.invalidConfig')
     case 'invalid_url':
       return t('admin.accounts.domainWhitelist.invalidUrl', { endpoint: error.endpoint || '' })
-    case 'https_required':
-      return t('admin.accounts.domainWhitelist.httpsRequired', { endpoint: error.endpoint || '' })
-    case 'domain_not_allowed':
-      return t('admin.accounts.domainWhitelist.domainNotAllowed', { hostname: error.hostname || '' })
+    case 'endpoint_not_allowed':
+      return t('admin.accounts.domainWhitelist.endpointNotAllowed', { endpoint: error.endpoint || '' })
   }
 }
 
-const createAccountWithDomainWhitelist = async (payload: CreateAccountRequest) => {
+const endpointWhitelistOptionsForAccount = (payload: CreateAccountRequest): AccountDomainWhitelistValidationOptions => ({
+  // API-key and Antigravity upstream URLs are entered by the administrator.
+  // OAuth providers may carry an internal fixed URL; only validate Grok when
+  // its custom upstream switch is explicitly enabled.
+  validateCredentialsBaseUrl:
+    payload.type === 'apikey' ||
+    (payload.platform === 'grok' && grokOAuthCustomBaseUrlEnabled.value),
+  validateCustomBaseUrl: true
+})
+
+const validateAccountCreationWhitelist = async (
+  payload: AccountEndpointPayload,
+  options: AccountDomainWhitelistValidationOptions = {}
+) => {
   try {
-    await validateAccountPayloadEndpoints(payload)
+    await validateAccountPayloadEndpoints(payload, options)
   } catch (error) {
     if (error instanceof AccountDomainWhitelistError) {
       throw new Error(formatAccountDomainWhitelistError(error))
     }
     throw error
   }
+}
+
+const createAccountWithDomainWhitelist = async (payload: CreateAccountRequest) => {
+  await validateAccountCreationWhitelist(payload, endpointWhitelistOptionsForAccount(payload))
   return adminAPI.accounts.create(payload)
 }
 
@@ -4622,7 +4625,7 @@ const resetForm = () => {
   form.expires_at = null
   accountCategory.value = 'oauth-based'
   addMethod.value = 'oauth'
-  apiKeyBaseUrl.value = 'https://api.anthropic.com'
+  apiKeyBaseUrl.value = ''
   apiKeyValue.value = ''
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
@@ -5049,19 +5052,14 @@ const handleSubmit = async () => {
     return
   }
 
-  // Determine default base URL based on platform
-  const defaultBaseUrl =
-    form.platform === 'openai'
-      ? 'https://api.openai.com'
-      : form.platform === 'gemini'
-        ? 'https://generativelanguage.googleapis.com'
-        : form.platform === 'grok'
-          ? 'https://api.x.ai/v1'
-          : 'https://api.anthropic.com'
+  if (!apiKeyBaseUrl.value.trim()) {
+    appStore.showError(t('admin.accounts.domainWhitelist.endpointRequired'))
+    return
+  }
 
   // Build credentials with optional model mapping
   const credentials: Record<string, unknown> = {
-    base_url: apiKeyBaseUrl.value.trim() || defaultBaseUrl,
+    base_url: apiKeyBaseUrl.value.trim(),
     api_key: apiKeyValue.value.trim()
   }
   if (form.platform === 'gemini') {
@@ -5370,6 +5368,13 @@ const handleGrokImportSSO = async (ssoInput: string) => {
   }
 
   try {
+    await validateAccountCreationWhitelist(
+      { credentials },
+      {
+        validateCredentialsBaseUrl: grokOAuthCustomBaseUrlEnabled.value,
+        validateCustomBaseUrl: false
+      }
+    )
     const result = await adminAPI.grok.createFromSSO({
       sso_tokens: ssoTokens,
       name: form.name || undefined,
@@ -5575,6 +5580,10 @@ const handleOpenAIImportCodexSession = async (content: string) => {
 
   try {
     const extra = buildOpenAICodexImportExtra()
+    await validateAccountCreationWhitelist(
+      { extra },
+      { validateCredentialsBaseUrl: false }
+    )
     const result = await adminAPI.accounts.importCodexSession({
       content: trimmed,
       name: form.name,
@@ -5653,6 +5662,10 @@ const handleOpenAIImportCodexPAT = async (accessToken: string) => {
 
   try {
     const extra = buildOpenAICodexImportExtra()
+    await validateAccountCreationWhitelist(
+      { extra },
+      { validateCredentialsBaseUrl: false }
+    )
     await adminAPI.accounts.createOpenAICodexPAT({
       access_token: trimmed,
       name: form.name,
