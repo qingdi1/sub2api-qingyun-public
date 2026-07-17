@@ -30,7 +30,7 @@ var (
 const (
 	updateCacheKey = "update_check_cache"
 	updateCacheTTL = 1200 // 20 minutes
-	githubRepo     = "qingdi1/sub2api"
+	githubRepo     = "qingdi1/sub2api-qingyun-public"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"

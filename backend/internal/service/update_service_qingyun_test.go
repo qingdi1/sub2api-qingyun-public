@@ -3,16 +3,16 @@ package service
 import "testing"
 
 func TestQingyunUpdateRepoConstant(t *testing.T) {
-	if githubRepo != "qingdi1/sub2api" {
-		t.Fatalf("githubRepo = %q, want qingdi1/sub2api", githubRepo)
+	if githubRepo != "qingdi1/sub2api-qingyun-public" {
+		t.Fatalf("githubRepo = %q, want qingdi1/sub2api-qingyun-public", githubRepo)
 	}
 }
 
 func TestValidateDownloadURLAllowsGHCR(t *testing.T) {
 	cases := []string{
-		"https://ghcr.io/qingdi1/sub2api:0.1.158",
+		"https://ghcr.io/qingdi1/sub2api-qingyun-public:0.1.158",
 		"https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:abc",
-		"https://github.com/qingdi1/sub2api/releases/download/v0.1.158/linux_amd64.tar.gz",
+		"https://github.com/qingdi1/sub2api-qingyun-public/releases/download/v0.1.158/linux_amd64.tar.gz",
 	}
 	for _, raw := range cases {
 		if err := validateDownloadURL(raw); err != nil {
