@@ -248,6 +248,69 @@ func (s *GitHubReleaseServiceSuite) TestFetchLatestRelease_Success() {
 	require.Equal(s.T(), "app-linux-amd64.tar.gz", release.Assets[0].Name)
 }
 
+func (s *GitHubReleaseServiceSuite) TestFetchLatestRelease_FallsBackToMaintainedBranchVersion() {
+	var requestedPaths []string
+	s.srv = newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		switch r.URL.Path {
+		case "/repos/test/repo/releases/latest":
+			w.WriteHeader(http.StatusNotFound)
+		case "/test/repo/qingyun-chat/VERSION":
+			w.WriteHeader(http.StatusNotFound)
+		case "/test/repo/qingyun-chat/backend/cmd/server/VERSION":
+			require.Equal(s.T(), "text/plain", r.Header.Get("Accept"))
+			require.Equal(s.T(), "Sub2API-Updater", r.Header.Get("User-Agent"))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("0.1.159-qingyun.1\n"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+
+	s.client = &githubReleaseClient{
+		httpClient: &http.Client{
+			Transport: &testTransport{testServerURL: s.srv.URL},
+		},
+		downloadHTTPClient: &http.Client{},
+	}
+
+	release, err := s.client.FetchLatestRelease(context.Background(), "test/repo")
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "v0.1.159-qingyun.1", release.TagName)
+	require.Equal(s.T(), "v0.1.159-qingyun.1", release.Name)
+	require.Equal(s.T(), "https://github.com/test/repo/blob/qingyun-chat/backend/cmd/server/VERSION", release.HTMLURL)
+	require.Contains(s.T(), release.Body, "ghcr.io/test/repo:0.1.159-qingyun.1")
+	require.Empty(s.T(), release.Assets)
+	require.Equal(s.T(), []string{
+		"/repos/test/repo/releases/latest",
+		"/test/repo/qingyun-chat/VERSION",
+		"/test/repo/qingyun-chat/backend/cmd/server/VERSION",
+	}, requestedPaths)
+}
+
+func (s *GitHubReleaseServiceSuite) TestFetchLatestRelease_FallsBackToMainWhenMaintainedVersionMissing() {
+	s.srv = newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/test/repo/main/VERSION" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("v0.1.160"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	s.client = &githubReleaseClient{
+		httpClient: &http.Client{
+			Transport: &testTransport{testServerURL: s.srv.URL},
+		},
+		downloadHTTPClient: &http.Client{},
+	}
+
+	release, err := s.client.FetchLatestRelease(context.Background(), "test/repo")
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "v0.1.160", release.TagName)
+	require.Equal(s.T(), "https://github.com/test/repo/blob/main/VERSION", release.HTMLURL)
+}
+
 func (s *GitHubReleaseServiceSuite) TestFetchRecentReleases_Success() {
 	releasesJSON := `[
 		{
@@ -332,7 +395,7 @@ func (s *GitHubReleaseServiceSuite) TestFetchLatestRelease_Non200() {
 
 	_, err := s.client.FetchLatestRelease(context.Background(), "test/repo")
 	require.Error(s.T(), err)
-	require.Contains(s.T(), err.Error(), "404")
+	require.Contains(s.T(), err.Error(), "not found")
 }
 
 func (s *GitHubReleaseServiceSuite) TestFetchLatestRelease_InvalidJSON() {

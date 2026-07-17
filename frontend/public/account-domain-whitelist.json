@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "domains": [
+    {
+      "hostname": "api.anthropic.com",
+      "include_subdomains": false
+    },
+    {
+      "hostname": "api.openai.com",
+      "include_subdomains": false
+    },
+    {
+      "hostname": "generativelanguage.googleapis.com",
+      "include_subdomains": false
+    },
+    {
+      "hostname": "cloudcode-pa.googleapis.com",
+      "include_subdomains": false
+    },
+    {
+      "hostname": "api.x.ai",
+      "include_subdomains": true
+    },
+    {
+      "hostname": "cli-chat-proxy.grok.com",
+      "include_subdomains": false
+    }
+  ]
+}

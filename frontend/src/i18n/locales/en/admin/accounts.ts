@@ -751,6 +751,13 @@ export default {
       accountCreated: 'Account created successfully',
       accountUpdated: 'Account updated successfully',
       failedToCreate: 'Failed to create account',
+      domainWhitelist: {
+        loadFailed: 'Could not load the account endpoint domain whitelist. Account creation was blocked.',
+        invalidConfig: 'The account endpoint domain whitelist is invalid. Account creation was blocked.',
+        invalidUrl: 'The account endpoint is not a valid URL: {endpoint}',
+        httpsRequired: 'The account endpoint must use HTTPS: {endpoint}',
+        domainNotAllowed: 'The account endpoint domain is not allowed: {hostname}'
+      },
       failedToUpdate: 'Failed to update account',
       pleaseSelectStatus: 'Please select a valid account status',
       mixedChannelWarningTitle: 'Mixed Channel Warning',

@@ -5180,9 +5180,13 @@
                     type="button"
                     class="ui-style-card"
                     :class="{ 'is-active': selectedUiStyle === style.id }"
+                    :data-style="style.id"
                     :style="{
                       '--swatch-primary': style.primary,
-                      '--swatch-accent': style.accent
+                      '--swatch-accent': style.accent,
+                      '--swatch-surface': style.surfaceStrong,
+                      '--swatch-border': style.border,
+                      '--swatch-glow': style.hoverGlow
                     }"
                     @click="selectUiStyle(style.id)"
                   >

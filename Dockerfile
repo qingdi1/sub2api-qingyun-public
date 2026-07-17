@@ -96,7 +96,7 @@ FROM ${ALPINE_IMAGE}
 # Labels
 LABEL maintainer="Qingyun <github.com/qingdi1>"
 LABEL description="Sub2API - AI API Gateway Platform"
-LABEL org.opencontainers.image.source="https://github.com/qingdi1/sub2api-qingyun"
+LABEL org.opencontainers.image.source="https://github.com/qingdi1/sub2api"
 
 # Install runtime dependencies
 RUN apk add --no-cache \

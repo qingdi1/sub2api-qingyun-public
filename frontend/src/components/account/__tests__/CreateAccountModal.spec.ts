@@ -136,6 +136,15 @@ async function openCodexImportStep(toggleClicks = 0) {
 
 describe('CreateAccountModal OpenAI long-context billing', () => {
   beforeEach(() => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        version: 1,
+        domains: [
+          { hostname: 'api.anthropic.com' },
+          { hostname: 'api.openai.com' }
+        ]
+      }), { status: 200 })
+    )
     createAccountMock.mockReset().mockResolvedValue({})
     importCodexSessionMock.mockReset().mockResolvedValue({
       created: 1,

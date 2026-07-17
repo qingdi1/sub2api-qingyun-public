@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,6 +24,12 @@ type githubReleaseClient struct {
 type githubReleaseClientError struct {
 	err error
 }
+
+var releaseFallbackVersionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
+
+var releaseFallbackBranches = []string{"qingyun-chat", "main"}
+
+var releaseFallbackVersionFiles = []string{"VERSION", "backend/cmd/server/VERSION"}
 
 // NewGitHubReleaseClient 创建 GitHub Release 客户端
 // proxyURL 为空时直连 GitHub，支持 http/https/socks5/socks5h 协议
@@ -93,6 +100,10 @@ func (c *githubReleaseClient) FetchLatestRelease(ctx context.Context, repo strin
 	if err != nil {
 		return nil, err
 	}
+	if resp.StatusCode == http.StatusNotFound {
+		_ = resp.Body.Close()
+		return c.fetchLatestVersionFallback(ctx, repo)
+	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
@@ -105,6 +116,77 @@ func (c *githubReleaseClient) FetchLatestRelease(ctx context.Context, repo strin
 	}
 
 	return &release, nil
+}
+
+// fetchLatestVersionFallback supports repositories that publish a container and
+// keep a version file on the maintained branch before creating GitHub Releases.
+func (c *githubReleaseClient) fetchLatestVersionFallback(ctx context.Context, repo string) (*service.GitHubRelease, error) {
+	var lastErr error
+	for _, branch := range releaseFallbackBranches {
+		for _, versionFile := range releaseFallbackVersionFiles {
+			version, found, err := c.fetchBranchVersion(ctx, repo, branch, versionFile)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if !found {
+				continue
+			}
+
+			return &service.GitHubRelease{
+				TagName: "v" + version,
+				Name:    "v" + version,
+				Body: fmt.Sprintf(
+					"Version detected from %s on the %s branch. Container image: ghcr.io/%s:%s",
+					versionFile,
+					branch,
+					repo,
+					version,
+				),
+				HTMLURL: fmt.Sprintf("https://github.com/%s/blob/%s/%s", repo, branch, versionFile),
+				Assets:  []service.GitHubAsset{},
+			}, nil
+		}
+	}
+
+	if lastErr != nil {
+		return nil, fmt.Errorf("GitHub release not found and version fallback failed: %w", lastErr)
+	}
+	return nil, fmt.Errorf("GitHub release and version files were not found for %s", repo)
+}
+
+func (c *githubReleaseClient) fetchBranchVersion(ctx context.Context, repo, branch, versionFile string) (string, bool, error) {
+	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s", repo, branch, versionFile)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", false, err
+	}
+	req.Header.Set("Accept", "text/plain")
+	req.Header.Set("User-Agent", "Sub2API-Updater")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return "", false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", false, fmt.Errorf("GitHub raw content returned %d for %s/%s", resp.StatusCode, branch, versionFile)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 257))
+	if err != nil {
+		return "", false, err
+	}
+	version := strings.TrimSpace(string(data))
+	if len(version) > 64 || !releaseFallbackVersionPattern.MatchString(version) {
+		return "", false, fmt.Errorf("invalid version in %s/%s", branch, versionFile)
+	}
+
+	return strings.TrimPrefix(version, "v"), true, nil
 }
 
 func (c *githubReleaseClient) FetchRecentReleases(ctx context.Context, repo string, perPage int) ([]*service.GitHubRelease, error) {

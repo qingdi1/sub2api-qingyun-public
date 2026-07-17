@@ -30,7 +30,7 @@ var (
 const (
 	updateCacheKey = "update_check_cache"
 	updateCacheTTL = 1200 // 20 minutes
-	githubRepo     = "qingdi1/sub2api-qingyun"
+	githubRepo     = "qingdi1/sub2api"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"
@@ -664,7 +664,11 @@ func parseVersion(v string) [3]int {
 	parts := strings.Split(v, ".")
 	result := [3]int{0, 0, 0}
 	for i := 0; i < len(parts) && i < 3; i++ {
-		if parsed, err := strconv.Atoi(parts[i]); err == nil {
+		part := parts[i]
+		if suffix := strings.IndexFunc(part, func(r rune) bool { return r < '0' || r > '9' }); suffix >= 0 {
+			part = part[:suffix]
+		}
+		if parsed, err := strconv.Atoi(part); err == nil {
 			result[i] = parsed
 		}
 	}

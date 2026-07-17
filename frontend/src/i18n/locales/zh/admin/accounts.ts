@@ -844,6 +844,13 @@ export default {
       accountCreated: '账号创建成功',
       accountUpdated: '账号更新成功',
       failedToCreate: '创建账号失败',
+      domainWhitelist: {
+        loadFailed: '无法加载账号接口域名白名单，已阻止创建账号。',
+        invalidConfig: '账号接口域名白名单配置无效，已阻止创建账号。',
+        invalidUrl: '账号接口地址不是有效的 URL：{endpoint}',
+        httpsRequired: '账号接口地址必须使用 HTTPS：{endpoint}',
+        domainNotAllowed: '账号接口域名不在白名单内：{hostname}'
+      },
       failedToUpdate: '更新账号失败',
       pleaseSelectStatus: '请选择有效的账号状态',
       mixedChannelWarningTitle: '混合渠道警告',

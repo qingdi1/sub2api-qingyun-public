@@ -2,6 +2,7 @@
   <div class="ui-theme-shell min-h-screen bg-gray-50 dark:bg-dark-950">
     <!-- Background Decorations -->
     <div class="pointer-events-none fixed inset-0 bg-mesh-gradient"></div>
+    <ThemePointerTrail />
 
     <!-- Sidebar -->
     <AppSidebar />
@@ -32,6 +33,7 @@ import { useOnboardingStore } from '@/stores/onboarding'
 import { applyUiStyle, readStoredUiStyle } from '@/themes/catalog'
 import AppSidebar from './AppSidebar.vue'
 import AppHeader from './AppHeader.vue'
+import ThemePointerTrail from '@/components/theme/ThemePointerTrail.vue'
 
 const appStore = useAppStore()
 const authStore = useAuthStore()

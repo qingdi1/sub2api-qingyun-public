@@ -3537,6 +3537,10 @@ import {
 } from '@/components/account/credentialsBuilder'
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
+import {
+  AccountDomainWhitelistError,
+  validateAccountPayloadEndpoints
+} from '@/utils/accountDomainWhitelist'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
   OPENAI_WS_MODE_CTX_POOL,
@@ -4520,6 +4524,33 @@ const withAntigravityConfirmFlag = (payload: CreateAccountRequest): CreateAccoun
   return cloned
 }
 
+const formatAccountDomainWhitelistError = (error: AccountDomainWhitelistError): string => {
+  switch (error.code) {
+    case 'load_failed':
+      return t('admin.accounts.domainWhitelist.loadFailed')
+    case 'invalid_config':
+      return t('admin.accounts.domainWhitelist.invalidConfig')
+    case 'invalid_url':
+      return t('admin.accounts.domainWhitelist.invalidUrl', { endpoint: error.endpoint || '' })
+    case 'https_required':
+      return t('admin.accounts.domainWhitelist.httpsRequired', { endpoint: error.endpoint || '' })
+    case 'domain_not_allowed':
+      return t('admin.accounts.domainWhitelist.domainNotAllowed', { hostname: error.hostname || '' })
+  }
+}
+
+const createAccountWithDomainWhitelist = async (payload: CreateAccountRequest) => {
+  try {
+    await validateAccountPayloadEndpoints(payload)
+  } catch (error) {
+    if (error instanceof AccountDomainWhitelistError) {
+      throw new Error(formatAccountDomainWhitelistError(error))
+    }
+    throw error
+  }
+  return adminAPI.accounts.create(payload)
+}
+
 const ensureAntigravityMixedChannelConfirmed = async (onConfirm: () => Promise<void>): Promise<boolean> => {
   if (!needsMixedChannelCheck(form.platform)) {
     return true
@@ -4553,7 +4584,7 @@ const ensureAntigravityMixedChannelConfirmed = async (onConfirm: () => Promise<v
 const submitCreateAccount = async (payload: CreateAccountRequest) => {
   submitting.value = true
   try {
-    await adminAPI.accounts.create(withAntigravityConfirmFlag(payload))
+    await createAccountWithDomainWhitelist(withAntigravityConfirmFlag(payload))
     appStore.showSuccess(t('admin.accounts.accountCreated'))
     emit('created')
     handleClose()
@@ -4568,7 +4599,7 @@ const submitCreateAccount = async (payload: CreateAccountRequest) => {
       })
       return
     }
-    appStore.showError(error.response?.data?.message || error.response?.data?.detail || t('admin.accounts.failedToCreate'))
+    appStore.showError(error.response?.data?.message || error.response?.data?.detail || error.message || t('admin.accounts.failedToCreate'))
   } finally {
     submitting.value = false
   }
@@ -5270,7 +5301,7 @@ const handleGrokValidateRT = async (refreshTokenInput: string) => {
           return
         }
 
-        await adminAPI.accounts.create({
+        await createAccountWithDomainWhitelist({
           name: accountName,
           notes: form.notes,
           platform: 'grok',
@@ -5436,7 +5467,7 @@ const handleOpenAIExchange = async (authCode: string) => {
     }
 
     if (shouldCreateOpenAI) {
-      await adminAPI.accounts.create({
+      await createAccountWithDomainWhitelist({
         name: form.name,
         notes: form.notes,
         platform: 'openai',
@@ -5717,7 +5748,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
         const accountName = refreshTokens.length > 1 ? `${baseName} #${i + 1}` : baseName
 
         if (shouldCreateOpenAI) {
-          await adminAPI.accounts.create({
+          await createAccountWithDomainWhitelist({
             name: accountName,
             notes: form.notes,
             platform: 'openai',
@@ -5832,7 +5863,7 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
           expires_at: form.expires_at,
           auto_pause_on_expired: autoPauseOnExpired.value
         })
-        await adminAPI.accounts.create(createPayload)
+        await createAccountWithDomainWhitelist(createPayload)
         successCount++
       } catch (error: any) {
         failedCount++
@@ -6197,7 +6228,7 @@ const handleCookieAuth = async (sessionKey: string) => {
           credentials.temp_unschedulable_rules = tempUnschedPayload
         }
 
-        await adminAPI.accounts.create({
+        await createAccountWithDomainWhitelist({
           name: accountName,
           notes: form.notes,
           platform: form.platform,
