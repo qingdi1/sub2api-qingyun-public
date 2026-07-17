@@ -71,7 +71,7 @@ body {
 }
 
 /* Keep ambient layers behind content without breaking the fixed sidebar/header. */
-.ui-theme-shell > *:not(.bg-mesh-gradient):not(.sidebar) {
+.ui-theme-shell > *:not(.bg-mesh-gradient):not(.sidebar):not(.theme-pointer-trail) {
   z-index: 1;
 }
 
