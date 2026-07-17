@@ -648,7 +648,7 @@ func compareVersions(current, latest string) int {
 	currentParts := parseVersion(current)
 	latestParts := parseVersion(latest)
 
-	for i := 0; i < 3; i++ {
+	for i := 0; i < len(currentParts); i++ {
 		if currentParts[i] < latestParts[i] {
 			return -1
 		}
@@ -659,10 +659,11 @@ func compareVersions(current, latest string) int {
 	return 0
 }
 
-func parseVersion(v string) [3]int {
+func parseVersion(v string) [4]int {
 	v = strings.TrimPrefix(v, "v")
-	parts := strings.Split(v, ".")
-	result := [3]int{0, 0, 0}
+	core, qingyunRevision, hasQingyunRevision := strings.Cut(v, "-qingyun.")
+	parts := strings.Split(core, ".")
+	result := [4]int{0, 0, 0, 0}
 	for i := 0; i < len(parts) && i < 3; i++ {
 		part := parts[i]
 		if suffix := strings.IndexFunc(part, func(r rune) bool { return r < '0' || r > '9' }); suffix >= 0 {
@@ -670,6 +671,14 @@ func parseVersion(v string) [3]int {
 		}
 		if parsed, err := strconv.Atoi(part); err == nil {
 			result[i] = parsed
+		}
+	}
+	if hasQingyunRevision {
+		if suffix := strings.IndexFunc(qingyunRevision, func(r rune) bool { return r < '0' || r > '9' }); suffix >= 0 {
+			qingyunRevision = qingyunRevision[:suffix]
+		}
+		if parsed, err := strconv.Atoi(qingyunRevision); err == nil {
+			result[3] = parsed
 		}
 	}
 	return result

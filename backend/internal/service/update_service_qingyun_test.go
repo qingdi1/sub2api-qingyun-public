@@ -29,7 +29,9 @@ func TestCompareVersionsHandlesQingyunSuffix(t *testing.T) {
 		want    int
 	}{
 		{name: "older upstream is not an update", current: "0.1.158-qingyun.1", latest: "0.1.151", want: 1},
-		{name: "same upstream core is current", current: "0.1.158-qingyun.1", latest: "v0.1.158", want: 0},
+		{name: "Qingyun revision is newer than upstream core", current: "0.1.158-qingyun.1", latest: "v0.1.158", want: 1},
+		{name: "upstream core detects first Qingyun revision", current: "0.1.158", latest: "v0.1.158-qingyun.1", want: -1},
+		{name: "newer Qingyun revision is an update", current: "0.1.158-qingyun.1", latest: "v0.1.158-qingyun.2", want: -1},
 		{name: "newer upstream is an update", current: "0.1.158-qingyun.1", latest: "0.1.159", want: -1},
 	}
 
