@@ -38,6 +38,13 @@ type systemRollbackResultService interface {
 	RollbackToVersionResult(ctx context.Context, version string) (*service.UpdateResult, error)
 }
 
+// systemUpdateStatusService is optional so installations using an older
+// update-agent protocol retain the existing update endpoints while newer
+// agents can report asynchronous progress and failure state.
+type systemUpdateStatusService interface {
+	GetDockerUpdateStatus(ctx context.Context) (*service.DockerUpdateAgentStatus, error)
+}
+
 // NewSystemHandler creates a new SystemHandler
 func NewSystemHandler(updateSvc systemUpdateService, lockSvc *service.SystemOperationLockService) *SystemHandler {
 	return &SystemHandler{
@@ -65,6 +72,22 @@ func (h *SystemHandler) CheckUpdates(c *gin.Context) {
 		return
 	}
 	response.Success(c, info)
+}
+
+// GetUpdateStatus returns the latest asynchronous Docker update state.
+// GET /api/v1/admin/system/update-status
+func (h *SystemHandler) GetUpdateStatus(c *gin.Context) {
+	statusService, ok := h.updateSvc.(systemUpdateStatusService)
+	if !ok {
+		response.ErrorFrom(c, service.ErrDockerUpdateStatusUnavailable)
+		return
+	}
+	status, err := statusService.GetDockerUpdateStatus(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, status)
 }
 
 // PerformUpdate downloads and applies the update

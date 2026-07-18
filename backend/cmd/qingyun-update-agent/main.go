@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,8 +19,11 @@ import (
 )
 
 const (
-	defaultListenAddress = ":8787"
-	tokenEnvironment     = "UPDATE_DOCKER_AGENT_TOKEN"
+	defaultListenAddress   = ":8787"
+	tokenEnvironment       = "UPDATE_DOCKER_AGENT_TOKEN"
+	pullTimeoutEnvironment = "UPDATE_DOCKER_AGENT_PULL_TIMEOUT"
+	minimumPullTimeout     = time.Minute
+	maximumPullTimeout     = 30 * time.Minute
 )
 
 type httpServer struct {
@@ -37,6 +41,11 @@ func main() {
 		slog.Error("update agent token is required", "environment", tokenEnvironment)
 		os.Exit(1)
 	}
+	pullTimeout, err := configuredPullTimeout(os.Getenv(pullTimeoutEnvironment))
+	if err != nil {
+		slog.Error("invalid update agent pull timeout", "environment", pullTimeoutEnvironment, "error", err)
+		os.Exit(1)
+	}
 
 	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -47,6 +56,7 @@ func main() {
 
 	logger := slog.Default()
 	service := newUpdater(dockerClient)
+	service.pullTimeout = pullTimeout
 	service.onComplete = func(err error) {
 		if err != nil {
 			logger.Error("Qingyun container update failed", "error", err)
@@ -105,6 +115,7 @@ func runHealthcheck() int {
 func (s *httpServer) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /v1/status", s.status)
 	mux.HandleFunc("POST /v1/update", s.update)
 	mux.HandleFunc("POST /v1/rollback", s.rollback)
 	return mux
@@ -112,6 +123,15 @@ func (s *httpServer) routes() http.Handler {
 
 func (s *httpServer) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *httpServer) status(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		writeJSON(w, http.StatusUnauthorized, updateResponse{Message: "unauthorized"})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.updater.statusSnapshot())
 }
 
 func (s *httpServer) update(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +172,7 @@ func (s *httpServer) queueOperation(w http.ResponseWriter, r *http.Request, oper
 		writeJSON(w, http.StatusBadRequest, updateResponse{Message: err.Error()})
 		return
 	}
-	if !s.updater.queue(version) {
+	if !s.updater.queue(version, operation) {
 		writeJSON(w, http.StatusConflict, updateResponse{
 			Queued:        false,
 			TargetVersion: requestedVersion,
@@ -170,6 +190,21 @@ func (s *httpServer) queueOperation(w http.ResponseWriter, r *http.Request, oper
 		TargetVersion: requestedVersion,
 		Message:       message,
 	})
+}
+
+func configuredPullTimeout(raw string) (time.Duration, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return defaultImagePullTimeout, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("must be a Go duration between %s and %s: %w", minimumPullTimeout, maximumPullTimeout, err)
+	}
+	if duration < minimumPullTimeout || duration > maximumPullTimeout {
+		return 0, fmt.Errorf("must be between %s and %s", minimumPullTimeout, maximumPullTimeout)
+	}
+	return duration, nil
 }
 
 func (s *httpServer) authorized(r *http.Request) bool {

@@ -62,6 +62,16 @@ type dockerUpdateAgentStub struct {
 	rollbackErr           error
 }
 
+type dockerUpdateAgentStatusStub struct {
+	*dockerUpdateAgentStub
+	status    *DockerUpdateAgentStatus
+	statusErr error
+}
+
+func (s *dockerUpdateAgentStatusStub) GetStatus(context.Context) (*DockerUpdateAgentStatus, error) {
+	return s.status, s.statusErr
+}
+
 func (s *dockerUpdateAgentStub) QueueUpdate(_ context.Context, targetVersion string) (*DockerUpdateAgentResult, error) {
 	s.targetVersion = targetVersion
 	return s.result, s.err
@@ -233,6 +243,69 @@ func TestDockerUpdateAgentClientRollbackPostsDedicatedEndpoint(t *testing.T) {
 	require.NotNil(t, result)
 	require.True(t, result.Queued)
 	require.Equal(t, "rollback accepted", result.Message)
+}
+
+func TestDockerUpdateAgentClientReadsProtectedStatus(t *testing.T) {
+	const token = "test-update-agent-token"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/v1/status", r.URL.Path)
+		require.Equal(t, "Bearer "+token, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"state":"pulling","operation":"update","target_version":"0.1.159-qingyun.7","message":"Downloading the requested image."}`))
+	}))
+	defer server.Close()
+
+	client := newDockerUpdateAgentClient(server.URL+"/v1/update", token)
+	statusClient, ok := client.(DockerUpdateAgentStatusClient)
+	require.True(t, ok)
+	status, err := statusClient.GetStatus(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, "pulling", status.State)
+	require.Equal(t, "update", status.Operation)
+	require.Equal(t, "0.1.159-qingyun.7", status.TargetVersion)
+}
+
+func TestUpdateServiceGetsDockerAgentStatus(t *testing.T) {
+	agent := &dockerUpdateAgentStatusStub{
+		dockerUpdateAgentStub: &dockerUpdateAgentStub{},
+		status: &DockerUpdateAgentStatus{
+			State:         "failed",
+			TargetVersion: "0.1.159-qingyun.7",
+			ErrorCode:     "IMAGE_PULL_TIMEOUT",
+		},
+	}
+	svc := NewUpdateServiceWithDeployment(
+		&updateServiceCacheStub{},
+		&updateServiceGitHubClientStub{},
+		"0.1.158-qingyun.2",
+		"release",
+		UpdateDeploymentConfig{Mode: UpdateDeploymentModeDockerAgent},
+		agent,
+	)
+
+	status, err := svc.GetDockerUpdateStatus(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, "failed", status.State)
+	require.Equal(t, "IMAGE_PULL_TIMEOUT", status.ErrorCode)
+}
+
+func TestUpdateServiceStatusRequiresCompatibleAgent(t *testing.T) {
+	svc := NewUpdateServiceWithDeployment(
+		&updateServiceCacheStub{},
+		&updateServiceGitHubClientStub{},
+		"0.1.158-qingyun.2",
+		"release",
+		UpdateDeploymentConfig{Mode: UpdateDeploymentModeDockerAgent},
+		&dockerUpdateAgentStub{},
+	)
+
+	_, err := svc.GetDockerUpdateStatus(context.Background())
+
+	require.ErrorIs(t, err, ErrDockerUpdateStatusUnavailable)
 }
 
 func TestUpdateServiceDockerAgentRollbackQueuesAllowlistedVersion(t *testing.T) {

@@ -32,9 +32,25 @@ const (
 	ociSourceLabel         = "org.opencontainers.image.source"
 	ociVersionLabel        = "org.opencontainers.image.version"
 	qingyunSourceURL       = "https://github.com/qingdi1/sub2api-qingyun-public"
+
+	defaultImagePullTimeout = 20 * time.Minute
+	defaultApplyTimeout     = 5 * time.Minute
 )
 
 var versionPattern = regexp.MustCompile(`^v?([0-9]+(?:\.[0-9]+){2}(?:-[0-9A-Za-z][0-9A-Za-z._-]*)?)$`)
+
+var errImagePullTimeout = errors.New("image pull timed out")
+
+const (
+	operationStateIdle           = "idle"
+	operationStateQueued         = "queued"
+	operationStatePulling        = "pulling"
+	operationStateVerifying      = "verifying"
+	operationStateReplacing      = "replacing"
+	operationStateWaitingHealthy = "waiting_healthy"
+	operationStateSucceeded      = "succeeded"
+	operationStateFailed         = "failed"
+)
 
 // DockerClient contains the only Docker operations the update agent is allowed
 // to perform. Keeping the interface narrow makes the container boundary
@@ -63,21 +79,43 @@ type updateResponse struct {
 	Message       string `json:"message"`
 }
 
+// operationStatus is deliberately small and free of Docker details. It is
+// retained in-memory by the update control plane so the application can show
+// meaningful progress or failure feedback without ever exposing its token to
+// the browser.
+type operationStatus struct {
+	State         string    `json:"state"`
+	Operation     string    `json:"operation,omitempty"`
+	TargetVersion string    `json:"target_version,omitempty"`
+	Message       string    `json:"message,omitempty"`
+	ErrorCode     string    `json:"error_code,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
 type updater struct {
 	docker DockerClient
 
 	mu                 sync.Mutex
 	inProgress         bool
 	onComplete         func(error)
+	pullTimeout        time.Duration
+	applyTimeout       time.Duration
 	healthTimeout      time.Duration
 	healthPollInterval time.Duration
+	status             operationStatus
 }
 
 func newUpdater(dockerClient DockerClient) *updater {
 	return &updater{
 		docker:             dockerClient,
+		pullTimeout:        defaultImagePullTimeout,
+		applyTimeout:       defaultApplyTimeout,
 		healthTimeout:      90 * time.Second,
 		healthPollInterval: time.Second,
+		status: operationStatus{
+			State:     operationStateIdle,
+			UpdatedAt: time.Now().UTC(),
+		},
 	}
 }
 
@@ -94,19 +132,34 @@ func imageReference(version string) string {
 	return qingyunImageRepository + ":" + version
 }
 
-func (u *updater) queue(version string) bool {
+func (u *updater) queue(version, operation string) bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.inProgress {
 		return false
 	}
 	u.inProgress = true
+	u.status = operationStatus{
+		State:         operationStateQueued,
+		Operation:     operation,
+		TargetVersion: version,
+		Message:       "Update request accepted and waiting for the Docker worker.",
+		UpdatedAt:     time.Now().UTC(),
+	}
 	go func() {
 		err := u.apply(context.Background(), version)
 		if u.onComplete != nil {
 			u.onComplete(err)
 		}
 		u.mu.Lock()
+		if err != nil {
+			u.status = failedOperationStatus(u.status, err)
+		} else {
+			u.status.State = operationStateSucceeded
+			u.status.Message = "The requested version is healthy and ready."
+			u.status.ErrorCode = ""
+			u.status.UpdatedAt = time.Now().UTC()
+		}
 		u.inProgress = false
 		u.mu.Unlock()
 	}()
@@ -114,27 +167,41 @@ func (u *updater) queue(version string) bool {
 }
 
 func (u *updater) apply(ctx context.Context, version string) (err error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-
-	target, err := u.findTarget(ctx)
+	targetCtx, cancelTarget := context.WithTimeout(ctx, u.effectiveApplyTimeout())
+	target, err := u.findTarget(targetCtx)
+	cancelTarget()
 	if err != nil {
 		return err
 	}
 
 	ref := imageReference(version)
-	pullStream, err := u.docker.ImagePull(ctx, ref, image.PullOptions{})
+	u.setStage(operationStatePulling, "Downloading the requested image.")
+	pullCtx, cancelPull := context.WithTimeout(ctx, u.effectivePullTimeout())
+	pullStream, err := u.docker.ImagePull(pullCtx, ref, image.PullOptions{})
 	if err != nil {
+		cancelPull()
+		if errors.Is(pullCtx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("%w: %s", errImagePullTimeout, ref)
+		}
 		return fmt.Errorf("pull Qingyun image %q: %w", ref, err)
 	}
 	if err := consumePullProgress(pullStream); err != nil {
+		cancelPull()
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(pullCtx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("%w: %s", errImagePullTimeout, ref)
+		}
 		return fmt.Errorf("pull Qingyun image %q: %w", ref, err)
 	}
-	if err := u.verifyTargetImage(ctx, ref, version); err != nil {
+	cancelPull()
+
+	applyCtx, cancelApply := context.WithTimeout(ctx, u.effectiveApplyTimeout())
+	defer cancelApply()
+	u.setStage(operationStateVerifying, "Verifying the published image.")
+	if err := u.verifyTargetImage(applyCtx, ref, version); err != nil {
 		return err
 	}
 
-	inspect, err := u.docker.ContainerInspect(ctx, target.ID)
+	inspect, err := u.docker.ContainerInspect(applyCtx, target.ID)
 	if err != nil {
 		return fmt.Errorf("inspect managed sub2api container: %w", err)
 	}
@@ -175,41 +242,85 @@ func (u *updater) apply(ctx context.Context, version string) (err error) {
 		}
 	}()
 
-	if err := u.docker.ContainerStop(ctx, target.ID, container.StopOptions{Timeout: &stopTimeout}); err != nil {
+	u.setStage(operationStateReplacing, "Replacing the application container.")
+	if err := u.docker.ContainerStop(applyCtx, target.ID, container.StopOptions{Timeout: &stopTimeout}); err != nil {
 		return fmt.Errorf("stop managed sub2api container: %w", err)
 	}
 	stopped = true
 
-	if err := u.docker.ContainerRename(ctx, target.ID, backupName); err != nil {
+	if err := u.docker.ContainerRename(applyCtx, target.ID, backupName); err != nil {
 		return fmt.Errorf("preserve managed sub2api container for rollback: %w", err)
 	}
 	renamed = true
 
 	for _, networkName := range sortedNetworkNames(networkingConfig) {
-		if err := u.docker.NetworkDisconnect(ctx, networkName, target.ID, false); err != nil {
+		if err := u.docker.NetworkDisconnect(applyCtx, networkName, target.ID, false); err != nil {
 			return fmt.Errorf("disconnect previous sub2api container from network %q: %w", networkName, err)
 		}
 		disconnectedNetworks = append(disconnectedNetworks, networkName)
 	}
 
-	created, err := u.docker.ContainerCreate(ctx, config, hostConfig, networkingConfig, nil, originalName)
+	created, err := u.docker.ContainerCreate(applyCtx, config, hostConfig, networkingConfig, nil, originalName)
 	if err != nil {
 		return fmt.Errorf("create updated sub2api container: %w", err)
 	}
 	newID = created.ID
 
-	if err := u.docker.ContainerStart(ctx, newID, container.StartOptions{}); err != nil {
+	if err := u.docker.ContainerStart(applyCtx, newID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("start updated sub2api container: %w", err)
 	}
-	if err := u.waitForHealthy(ctx, newID); err != nil {
+	u.setStage(operationStateWaitingHealthy, "Waiting for the replacement container to become healthy.")
+	if err := u.waitForHealthy(applyCtx, newID); err != nil {
 		return fmt.Errorf("updated sub2api container did not become healthy: %w", err)
 	}
-	if err := u.docker.ContainerRemove(ctx, target.ID, container.RemoveOptions{}); err != nil {
+	if err := u.docker.ContainerRemove(applyCtx, target.ID, container.RemoveOptions{}); err != nil {
 		return fmt.Errorf("remove rollback sub2api container: %w", err)
 	}
 
 	completed = true
 	return nil
+}
+
+func (u *updater) effectivePullTimeout() time.Duration {
+	if u.pullTimeout <= 0 {
+		return defaultImagePullTimeout
+	}
+	return u.pullTimeout
+}
+
+func (u *updater) effectiveApplyTimeout() time.Duration {
+	if u.applyTimeout <= 0 {
+		return defaultApplyTimeout
+	}
+	return u.applyTimeout
+}
+
+func (u *updater) setStage(state, message string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.status.State = state
+	u.status.Message = message
+	u.status.ErrorCode = ""
+	u.status.UpdatedAt = time.Now().UTC()
+}
+
+func (u *updater) statusSnapshot() operationStatus {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.status
+}
+
+func failedOperationStatus(current operationStatus, err error) operationStatus {
+	current.State = operationStateFailed
+	current.UpdatedAt = time.Now().UTC()
+	if errors.Is(err, errImagePullTimeout) {
+		current.ErrorCode = "IMAGE_PULL_TIMEOUT"
+		current.Message = "The image download timed out. Check registry connectivity and retry."
+		return current
+	}
+	current.ErrorCode = "UPDATE_FAILED"
+	current.Message = "The update agent could not complete the requested operation. Check its logs and retry."
+	return current
 }
 
 func (u *updater) verifyTargetImage(ctx context.Context, ref, version string) error {

@@ -65,6 +65,16 @@ type systemHandlerDockerRollbackStub struct {
 	rollbackResultErr error
 }
 
+type systemHandlerDockerStatusStub struct {
+	*systemHandlerUpdateServiceStub
+	status    *service.DockerUpdateAgentStatus
+	statusErr error
+}
+
+func (s *systemHandlerDockerStatusStub) GetDockerUpdateStatus(context.Context) (*service.DockerUpdateAgentStatus, error) {
+	return s.status, s.statusErr
+}
+
 func (s *systemHandlerDockerRollbackStub) RollbackToVersionResult(context.Context, string) (*service.UpdateResult, error) {
 	return s.rollbackResult, s.rollbackResultErr
 }
@@ -109,6 +119,7 @@ func newSystemHandlerTestRouter(t *testing.T, updateSvc systemUpdateService, rep
 	router := gin.New()
 	router.POST("/api/v1/admin/system/update", handler.PerformUpdate)
 	router.POST("/api/v1/admin/system/rollback", handler.Rollback)
+	router.GET("/api/v1/admin/system/update-status", handler.GetUpdateStatus)
 	router.GET("/api/v1/admin/system/rollback-versions", handler.GetRollbackVersions)
 	return router
 }
@@ -373,4 +384,32 @@ func TestSystemHandlerGetRollbackVersionsError(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+func TestSystemHandlerGetDockerUpdateStatus(t *testing.T) {
+	updateSvc := &systemHandlerDockerStatusStub{
+		systemHandlerUpdateServiceStub: &systemHandlerUpdateServiceStub{},
+		status: &service.DockerUpdateAgentStatus{
+			State:         "pulling",
+			Operation:     "update",
+			TargetVersion: "0.1.159-qingyun.7",
+			Message:       "Downloading the requested image.",
+		},
+	}
+	repo := newMemoryIdempotencyRepoStub()
+	router := newSystemHandlerTestRouter(t, updateSvc, repo)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/system/update-status", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Code int                             `json:"code"`
+		Data service.DockerUpdateAgentStatus `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, 0, body.Code)
+	require.Equal(t, "pulling", body.Data.State)
+	require.Equal(t, "0.1.159-qingyun.7", body.Data.TargetVersion)
 }

@@ -627,6 +627,12 @@ function handleDemoRequest(config: InternalAxiosRequestConfig): unknown {
       build_type: 'demo',
     }
   }
+  if (path === '/admin/system/update-status' && method === 'get') {
+    return {
+      state: 'idle',
+      message: 'Demo updates are simulated locally.',
+    }
+  }
   if (path === '/admin/system/rollback-versions' && method === 'get') return { versions: [] }
   if (path === '/admin/dashboard/stats' && method === 'get') return adminDashboardStats()
   if (path === '/admin/dashboard/realtime' && method === 'get') return adminRealtimeMetrics()
@@ -661,6 +667,11 @@ function handleDemoRequest(config: InternalAxiosRequestConfig): unknown {
   if (path === '/admin/dashboard/api-keys-trend' && method === 'get') return { trend: [], start_date: '', end_date: '', granularity: 'day' }
   if (path === '/admin/dashboard/users-usage' && method === 'post') return { stats: {} }
   if (path === '/admin/dashboard/api-keys-usage' && method === 'post') return { stats: {} }
+
+  // User management loads custom attribute definitions separately from the
+  // paginated user list. Keep this as an array so table column derivation can
+  // safely use Array.prototype.filter in the demo administrator console.
+  if (path === '/admin/user-attributes' && method === 'get') return []
 
   // Read-only list views get an empty, correctly shaped page so the demo
   // sidebar can be explored without a request falling through to production.

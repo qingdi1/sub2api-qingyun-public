@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,6 +43,10 @@ var (
 	ErrDockerRollbackUnsupported = infraerrors.Conflict(
 		"DOCKER_ROLLBACK_UNSUPPORTED",
 		"Rollback from this Docker deployment is not available through the binary updater. Pin the desired image version with Docker Compose.",
+	)
+	ErrDockerUpdateStatusUnavailable = infraerrors.ServiceUnavailable(
+		"UPDATE_AGENT_STATUS_UNAVAILABLE",
+		"The Docker update agent status could not be reached. Verify the update-agent service and try again.",
 	)
 )
 
@@ -111,15 +116,35 @@ type DockerRollbackAgent interface {
 	QueueRollback(ctx context.Context, targetVersion string) (*DockerUpdateAgentResult, error)
 }
 
+// DockerUpdateAgentStatusClient is optional so existing update-only agent
+// integrations remain compatible while newer agents can report asynchronous
+// progress and failure states back to the administrator UI.
+type DockerUpdateAgentStatusClient interface {
+	GetStatus(ctx context.Context) (*DockerUpdateAgentStatus, error)
+}
+
 // DockerUpdateAgentResult is the accepted asynchronous update request returned by the agent.
 type DockerUpdateAgentResult struct {
 	Queued  bool   `json:"queued"`
 	Message string `json:"message,omitempty"`
 }
 
+// DockerUpdateAgentStatus is the sanitized progress snapshot returned by the
+// private update control plane. Browser clients only receive it through the
+// authenticated administrator API; they never know the agent endpoint/token.
+type DockerUpdateAgentStatus struct {
+	State         string `json:"state"`
+	Operation     string `json:"operation,omitempty"`
+	TargetVersion string `json:"target_version,omitempty"`
+	Message       string `json:"message,omitempty"`
+	ErrorCode     string `json:"error_code,omitempty"`
+	UpdatedAt     string `json:"updated_at,omitempty"`
+}
+
 type dockerUpdateAgentClient struct {
 	endpoint         string
 	rollbackEndpoint string
+	statusEndpoint   string
 	token            string
 	client           *http.Client
 }
@@ -334,6 +359,25 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateResult, error
 	}
 }
 
+// GetDockerUpdateStatus returns the latest asynchronous operation state from
+// the configured Docker control plane. It deliberately exposes no image or
+// container identifier, and is only used by the authenticated admin handler.
+func (s *UpdateService) GetDockerUpdateStatus(ctx context.Context) (*DockerUpdateAgentStatus, error) {
+	mode := s.deliveryMode()
+	if mode != UpdateDeploymentModeDockerAgent {
+		return nil, s.deliveryError(ErrDockerUpdateStatusUnavailable, mode, "")
+	}
+	statusClient, ok := s.dockerAgent.(DockerUpdateAgentStatusClient)
+	if !ok || statusClient == nil {
+		return nil, s.deliveryError(ErrDockerUpdateStatusUnavailable, mode, "")
+	}
+	status, err := statusClient.GetStatus(ctx)
+	if err != nil {
+		return nil, s.deliveryError(ErrDockerUpdateStatusUnavailable, mode, "").WithCause(err)
+	}
+	return status, nil
+}
+
 func (s *UpdateService) deliveryMode() string {
 	configured := strings.ToLower(strings.TrimSpace(s.deployment.Mode))
 	switch configured {
@@ -400,12 +444,15 @@ func (s *UpdateService) dockerRollbackAgentError(mode, targetVersion string, err
 func newDockerUpdateAgentClient(endpoint, token string) DockerUpdateAgent {
 	endpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/")
 	rollbackEndpoint := endpoint + "/rollback"
+	statusEndpoint := endpoint + "/status"
 	if strings.HasSuffix(endpoint, "/update") {
 		rollbackEndpoint = strings.TrimSuffix(endpoint, "/update") + "/rollback"
+		statusEndpoint = strings.TrimSuffix(endpoint, "/update") + "/status"
 	}
 	return &dockerUpdateAgentClient{
 		endpoint:         endpoint,
 		rollbackEndpoint: rollbackEndpoint,
+		statusEndpoint:   statusEndpoint,
 		token:            strings.TrimSpace(token),
 		client: &http.Client{
 			Timeout: dockerUpdateAgentRequestTimeout,
@@ -422,6 +469,44 @@ func (a *dockerUpdateAgentClient) QueueUpdate(ctx context.Context, targetVersion
 
 func (a *dockerUpdateAgentClient) QueueRollback(ctx context.Context, targetVersion string) (*DockerUpdateAgentResult, error) {
 	return a.queueAt(ctx, a.rollbackEndpoint, targetVersion)
+}
+
+func (a *dockerUpdateAgentClient) GetStatus(ctx context.Context) (*DockerUpdateAgentStatus, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.statusEndpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build docker update status request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "Sub2API-Docker-Updater")
+	if a.token != "" {
+		req.Header.Set("Authorization", "Bearer "+a.token)
+	}
+
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("send docker update status request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, dockerUpdateAgentMaxResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read docker update status response: %w", err)
+	}
+	if len(body) > dockerUpdateAgentMaxResponseBytes {
+		return nil, fmt.Errorf("docker update status response exceeds %d bytes", dockerUpdateAgentMaxResponseBytes)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("docker update agent status returned HTTP %d", resp.StatusCode)
+	}
+
+	var status DockerUpdateAgentStatus
+	if err := json.Unmarshal(body, &status); err != nil {
+		return nil, fmt.Errorf("decode docker update status response: %w", err)
+	}
+	if strings.TrimSpace(status.State) == "" {
+		return nil, errors.New("docker update agent returned an empty status")
+	}
+	return &status, nil
 }
 
 func (a *dockerUpdateAgentClient) queueAt(ctx context.Context, endpoint, targetVersion string) (*DockerUpdateAgentResult, error) {

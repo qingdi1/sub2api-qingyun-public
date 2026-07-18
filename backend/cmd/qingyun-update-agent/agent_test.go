@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -171,6 +172,102 @@ func TestApplyRollsBackWhenReplacementIsUnhealthy(t *testing.T) {
 	}
 }
 
+func TestApplyTimesOutSlowImagePullBeforeStoppingTarget(t *testing.T) {
+	fake := &fakeDockerClient{
+		containers: []container.Summary{{ID: "sub2api-id"}},
+		imagePull: func(ctx context.Context, _ string, _ image.PullOptions) (io.ReadCloser, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	agent := newUpdater(fake)
+	agent.pullTimeout = time.Millisecond
+	agent.applyTimeout = time.Second
+
+	err := agent.apply(context.Background(), "0.1.158-qingyun.2")
+	if !errors.Is(err, errImagePullTimeout) {
+		t.Fatalf("apply error = %v, want image pull timeout", err)
+	}
+	if len(fake.stopCalls) != 0 || len(fake.startCalls) != 0 {
+		t.Fatalf("slow pull must not touch the managed container: stops=%v starts=%v", fake.stopCalls, fake.startCalls)
+	}
+}
+
+func TestStatusRouteRequiresAuthorizationAndReportsFailures(t *testing.T) {
+	fake := &fakeDockerClient{
+		containers: []container.Summary{{ID: "sub2api-id"}},
+		imagePull: func(context.Context, string, image.PullOptions) (io.ReadCloser, error) {
+			return nil, errors.New("registry unavailable")
+		},
+	}
+	agent := newUpdater(fake)
+	server := (&httpServer{updater: agent, token: "test-token"}).routes()
+
+	unauthorized := httptest.NewRecorder()
+	server.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/v1/status", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d, want %d", unauthorized.Code, http.StatusUnauthorized)
+	}
+
+	if !agent.queue("0.1.158-qingyun.2", "update") {
+		t.Fatal("queue should accept the first update")
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		agent.mu.Lock()
+		inProgress := agent.inProgress
+		agent.mu.Unlock()
+		if !inProgress {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/status", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	server.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status code = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var status operationStatus
+	if err := json.Unmarshal(recorder.Body.Bytes(), &status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if status.State != operationStateFailed || status.ErrorCode != "UPDATE_FAILED" {
+		t.Fatalf("status = %#v, want failed UPDATE_FAILED", status)
+	}
+	if status.TargetVersion != "0.1.158-qingyun.2" || status.Operation != "update" {
+		t.Fatalf("status did not retain operation target: %#v", status)
+	}
+}
+
+func TestConfiguredPullTimeoutBounds(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  time.Duration
+		ok    bool
+	}{
+		{name: "default", input: "", want: defaultImagePullTimeout, ok: true},
+		{name: "configured", input: "12m", want: 12 * time.Minute, ok: true},
+		{name: "too short", input: "30s"},
+		{name: "too long", input: "31m"},
+		{name: "invalid", input: "forever"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := configuredPullTimeout(test.input)
+			if (err == nil) != test.ok {
+				t.Fatalf("configuredPullTimeout(%q) error = %v, want ok=%v", test.input, err, test.ok)
+			}
+			if got != test.want {
+				t.Fatalf("configuredPullTimeout(%q) = %s, want %s", test.input, got, test.want)
+			}
+		})
+	}
+}
+
 func TestRollbackRouteQueuesAuthorizedVersion(t *testing.T) {
 	const targetVersion = "0.1.158-qingyun.1"
 	old := managedInspect("sub2api-id", "/sub2api-ink", "0.1.158-qingyun.2")
@@ -292,10 +389,14 @@ type fakeDockerClient struct {
 	removeCalls            []string
 	networkDisconnectCalls []string
 	networkConnectCalls    []string
+	imagePull              func(context.Context, string, image.PullOptions) (io.ReadCloser, error)
 }
 
-func (f *fakeDockerClient) ImagePull(_ context.Context, ref string, _ image.PullOptions) (io.ReadCloser, error) {
+func (f *fakeDockerClient) ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error) {
 	f.pullRefs = append(f.pullRefs, ref)
+	if f.imagePull != nil {
+		return f.imagePull(ctx, ref, options)
+	}
 	return io.NopCloser(strings.NewReader("{}\n")), nil
 }
 

@@ -110,6 +110,9 @@ services:
     environment:
       UPDATE_DOCKER_AGENT_TOKEN: ${UPDATE_DOCKER_AGENT_TOKEN:?UPDATE_DOCKER_AGENT_TOKEN is required}
       UPDATE_DOCKER_AGENT_LISTEN_ADDR: :8787
+      # Large GHCR layers can take several minutes on constrained links. The
+      # agent validates this duration in the inclusive 1m..30m range.
+      UPDATE_DOCKER_AGENT_PULL_TIMEOUT: ${UPDATE_DOCKER_AGENT_PULL_TIMEOUT:-20m}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:

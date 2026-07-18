@@ -56,6 +56,15 @@ export interface UpdateResult {
   already_up_to_date?: boolean
 }
 
+export interface UpdateAgentStatus {
+  state: 'idle' | 'queued' | 'pulling' | 'verifying' | 'replacing' | 'waiting_healthy' | 'succeeded' | 'failed' | string
+  operation?: 'update' | 'rollback' | string
+  target_version?: string
+  message?: string
+  error_code?: string
+  updated_at?: string
+}
+
 export interface RollbackVersionInfo {
   version: string
   published_at: string
@@ -78,6 +87,16 @@ export async function getRollbackVersions(): Promise<{ versions: RollbackVersion
  */
 export async function performUpdate(): Promise<UpdateResult> {
   const { data } = await apiClient.post<UpdateResult>('/admin/system/update')
+  return data
+}
+
+/**
+ * Read the latest asynchronous Docker-agent operation state through the
+ * authenticated application backend. The browser never contacts the agent
+ * directly and never receives its bearer token.
+ */
+export async function getUpdateStatus(): Promise<UpdateAgentStatus> {
+  const { data } = await apiClient.get<UpdateAgentStatus>('/admin/system/update-status')
   return data
 }
 
@@ -105,6 +124,7 @@ export const systemAPI = {
   getVersion,
   checkUpdates,
   performUpdate,
+  getUpdateStatus,
   getRollbackVersions,
   rollback,
   restartService

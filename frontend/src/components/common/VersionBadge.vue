@@ -682,8 +682,10 @@ import {
   performUpdate,
   restartService,
   getRollbackVersions,
+  getUpdateStatus,
   rollback as rollbackAPI,
-  type RollbackVersionInfo
+  type RollbackVersionInfo,
+  type UpdateAgentStatus
 } from '@/api/admin/system'
 import { isDemoSession } from '@/api/demo'
 import { useClipboard } from '@/composables/useClipboard'
@@ -735,7 +737,11 @@ const queuedPollAttempts = ref(0)
 const successKind = ref<'update' | 'rollback'>('update')
 
 const QUEUED_POLL_INTERVAL_MS = 1500
-const QUEUED_POLL_MAX_ATTEMPTS = 80
+// Docker image pulls can legitimately take several minutes on a slow registry
+// path. The update agent supplies an explicit terminal state, so keep polling
+// long enough for its bounded pull timeout instead of abandoning the UI after
+// two minutes and leaving a permanent "queued" card behind.
+const QUEUED_POLL_MAX_ATTEMPTS = 800
 
 // Rollback states
 const rollbackPanelOpen = ref(false)
@@ -865,6 +871,20 @@ function queuedUpdateReachedTarget(info: { current_version?: string } | null, ta
   return normalizedVersion(info.current_version) === normalizedVersion(target)
 }
 
+function statusBelongsToQueuedTarget(status: UpdateAgentStatus, target: string): boolean {
+  if (!target || !status.target_version) return true
+  return normalizedVersion(status.target_version) === normalizedVersion(target)
+}
+
+function failQueuedOperation(message: string) {
+  stopQueuedPolling()
+  updateQueued.value = false
+  updateSuccess.value = false
+  needRestart.value = false
+  updateMessage.value = ''
+  updateError.value = message || t('version.updateFailed')
+}
+
 function finishQueuedOperation(info?: { current_version?: string } | null) {
   if (!updateQueued.value) return
   if (info?.current_version) {
@@ -887,7 +907,32 @@ function pollQueuedOperation(targetVersion: string) {
     if (!updateQueued.value || !targetVersion) return
 
     queuedPollAttempts.value += 1
-    const info = await appStore.fetchVersion(true)
+    let status: UpdateAgentStatus | null = null
+    try {
+      status = await getUpdateStatus()
+    } catch {
+      // Older control planes may not implement the status endpoint yet. Keep
+      // the existing version verification fallback rather than treating a
+      // transient status read as a failed deployment.
+    }
+
+    if (status && statusBelongsToQueuedTarget(status, targetVersion)) {
+      if (status.state === 'failed') {
+        failQueuedOperation(status.message || t('version.updateFailed'))
+        return
+      }
+      if (status.message) {
+        updateMessage.value = status.message
+      }
+    }
+
+    let info: { current_version?: string } | null = null
+    try {
+      info = await appStore.fetchVersion(true)
+    } catch {
+      // The app container may be restarting. The agent status stays available
+      // and the next poll will verify the deployed version once it is healthy.
+    }
     if (queuedUpdateReachedTarget(info, targetVersion)) {
       finishQueuedOperation(info)
       return

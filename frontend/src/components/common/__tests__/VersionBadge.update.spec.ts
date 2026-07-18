@@ -17,6 +17,7 @@ const appStore = vi.hoisted(() => ({
 }))
 const systemAPI = vi.hoisted(() => ({
   performUpdate: vi.fn(),
+  getUpdateStatus: vi.fn(),
   restartService: vi.fn(),
   getRollbackVersions: vi.fn(),
   rollback: vi.fn()
@@ -78,6 +79,7 @@ describe('VersionBadge Docker update flow', () => {
     appStore.fetchVersion.mockResolvedValue(null)
     appStore.clearVersionCache.mockReset()
     systemAPI.performUpdate.mockReset()
+    systemAPI.getUpdateStatus.mockReset()
     systemAPI.restartService.mockReset()
     systemAPI.getRollbackVersions.mockReset()
     systemAPI.rollback.mockReset()
@@ -215,6 +217,42 @@ describe('VersionBadge Docker update flow', () => {
     )
     expect(restartButton).not.toBeUndefined()
     expect(systemAPI.restartService).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+  })
+
+  it('shows an agent-reported deployment failure and restores a retry path', async () => {
+    systemAPI.performUpdate.mockResolvedValue({
+      queued: true,
+      target_version: '0.1.158',
+      delivery_mode: 'docker-agent',
+      need_restart: false,
+      message: 'accepted'
+    })
+    systemAPI.getUpdateStatus.mockResolvedValue({
+      state: 'failed',
+      target_version: '0.1.158',
+      error_code: 'IMAGE_PULL_TIMEOUT',
+      message: 'The image download timed out. Check registry connectivity and retry.'
+    })
+
+    const wrapper = mount(VersionBadge, {
+      attachTo: document.body,
+      global: { stubs: { Icon: true } }
+    })
+    const trigger = wrapper.get('button[title="version.updateAvailable"]')
+    setTriggerRect(trigger.element)
+
+    await trigger.trigger('click')
+    await flushPromises()
+    document.body.querySelector<HTMLButtonElement>('[data-testid="version-update-action"]')?.click()
+    await flushPromises()
+
+    expect(systemAPI.getUpdateStatus).toHaveBeenCalledTimes(1)
+    expect(document.body.textContent).toContain('version.updateFailed')
+    expect(document.body.textContent).toContain('The image download timed out.')
+    expect(document.body.querySelector('[data-testid="version-update-queued"]')).toBeNull()
+    expect(document.body.textContent).toContain('version.retry')
 
     wrapper.unmount()
   })

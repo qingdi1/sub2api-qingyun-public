@@ -115,6 +115,15 @@ describe('demo API adapter', () => {
     expect(networkAdapter).not.toHaveBeenCalled()
   })
 
+  it('returns array-shaped user attribute definitions for the demo administrator user page', async () => {
+    const response = await apiClient.get('/admin/user-attributes', {
+      params: { enabled: true },
+    })
+
+    expect(response.data).toEqual([])
+    expect(networkAdapter).not.toHaveBeenCalled()
+  })
+
   it('keeps administrator writes in the demo boundary', async () => {
     const response = await apiClient.put('/admin/settings', { site_name: 'should not persist' })
 
