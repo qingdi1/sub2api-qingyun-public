@@ -33,6 +33,7 @@ concurrency:
 jobs:
   # Update VERSION file with tag version
   update-version:
+    if: ${{ github.event.deleted != true }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -57,6 +58,7 @@ jobs:
           retention-days: 1
 
   build-frontend:
+    if: ${{ github.event.deleted != true }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -90,6 +92,7 @@ jobs:
           retention-days: 1
 
   release:
+    if: ${{ github.event.deleted != true }}
     needs: [update-version, build-frontend]
     runs-on: ubuntu-latest
     outputs:
@@ -343,7 +346,7 @@ jobs:
 
   sync-version-file:
     needs: [release]
-    if: ${{ needs.release.result == 'success' }}
+    if: ${{ github.event.deleted != true && needs.release.result == 'success' }}
     runs-on: ubuntu-latest
     env:
       QINGYUN_RELEASE_IMAGE_DIGEST: ${{ needs.release.outputs.application_image_digest }}
