@@ -24,8 +24,8 @@
                 <h2 class="truncate text-2xl font-semibold text-gray-900 dark:text-white">
                   {{ displayName }}
                 </h2>
-                <span :class="['badge', user?.role === 'admin' ? 'badge-primary' : 'badge-gray']">
-                  {{ user?.role === 'admin' ? t('profile.administrator') : t('profile.user') }}
+                <span :class="['badge', isAdminProfile ? 'badge-primary' : 'badge-gray']">
+                  {{ isAdminProfile ? t('profile.administrator') : t('profile.user') }}
                 </span>
                 <span
                   :class="['badge', user?.status === 'active' ? 'badge-success' : 'badge-danger']"
@@ -208,6 +208,10 @@ const props = withDefaults(defineProps<{
 })
 
 const { t } = useI18n()
+
+// Demo users view the administrator console locally while remaining regular
+// users to the backend. Keep the profile badge aligned with that console.
+const isAdminProfile = computed(() => props.user?.role === 'admin' || props.user?.is_demo === true)
 
 function normalizeBindingStatus(binding: boolean | UserAuthBindingStatus | undefined): boolean | null {
   if (typeof binding === 'boolean') {

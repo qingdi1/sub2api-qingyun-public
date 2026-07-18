@@ -1176,6 +1176,19 @@ update:
   # 留空表示直连（适用于海外服务器）
   proxy_url: ""
 
+  # Update delivery: auto, binary, docker-agent, or docker-manual.
+  # auto permits in-place replacement only for release binaries outside a container.
+  # Container/source builds require the Docker agent or an operator-managed image update.
+  deployment_mode: "auto"
+
+  # Exact private Docker update-agent endpoint and its shared bearer token.
+  # Configure both only for docker-agent mode. The agent owns the fixed Qingyun
+  # image repository and managed container selection; this application sends only
+  # the server-selected target_version.
+  # docker_agent_url: "http://qingyun-update-agent:8787/v1/update"
+  docker_agent_url: ""
+  docker_agent_token: ""
+
 # =============================================================================
 # Image Storage (异步图片任务结果对象存储)
 # =============================================================================

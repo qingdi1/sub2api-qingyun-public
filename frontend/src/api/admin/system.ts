@@ -18,6 +18,8 @@ export interface VersionInfo {
   release_info?: ReleaseInfo
   cached: boolean
   warning?: string
+  /** How an available update will be applied, for example `docker-agent`. */
+  delivery_mode?: string
   build_type: string // "source" for manual builds, "release" for CI builds
 }
 
@@ -42,7 +44,16 @@ export async function checkUpdates(force = false): Promise<VersionInfo> {
 
 export interface UpdateResult {
   message: string
-  need_restart: boolean
+  /** In-place binary updates require a restart; Docker-agent updates are queued instead. */
+  need_restart?: boolean
+  /** True when the Docker update agent accepted the request for asynchronous delivery. */
+  queued?: boolean
+  /** Backward/forward-compatible alias used by update agents. */
+  update_scheduled?: boolean
+  target_version?: string
+  delivery_mode?: string
+  operation_id?: string
+  already_up_to_date?: boolean
 }
 
 export interface RollbackVersionInfo {

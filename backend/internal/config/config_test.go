@@ -35,6 +35,39 @@ func TestLoadServerTimingConfig(t *testing.T) {
 	})
 }
 
+func TestLoadUpdateDeliveryConfig(t *testing.T) {
+	t.Run("defaults to auto delivery", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, "auto", cfg.Update.DeploymentMode)
+		require.Empty(t, cfg.Update.DockerAgentURL)
+		require.Empty(t, cfg.Update.DockerAgentToken)
+	})
+
+	t.Run("accepts an authenticated Docker agent", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("UPDATE_DEPLOYMENT_MODE", "docker-agent")
+		t.Setenv("UPDATE_DOCKER_AGENT_URL", "http://qingyun-update-agent:8787/v1/update")
+		t.Setenv("UPDATE_DOCKER_AGENT_TOKEN", "test-shared-token")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, "docker-agent", cfg.Update.DeploymentMode)
+		require.Equal(t, "http://qingyun-update-agent:8787/v1/update", cfg.Update.DockerAgentURL)
+	})
+
+	t.Run("rejects Docker agent without token", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("UPDATE_DEPLOYMENT_MODE", "docker-agent")
+		t.Setenv("UPDATE_DOCKER_AGENT_URL", "http://qingyun-update-agent:8787/v1/update")
+
+		_, err := Load()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "update.docker_agent_token")
+	})
+}
+
 func TestLoadForBootstrapAllowsMissingJWTSecret(t *testing.T) {
 	viper.Reset()
 	t.Setenv("JWT_SECRET", "")

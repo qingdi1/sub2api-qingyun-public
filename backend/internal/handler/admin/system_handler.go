@@ -24,10 +24,18 @@ type SystemHandler struct {
 
 type systemUpdateService interface {
 	CheckUpdate(ctx context.Context, force bool) (*service.UpdateInfo, error)
-	PerformUpdate(ctx context.Context) error
+	PerformUpdate(ctx context.Context) (*service.UpdateResult, error)
 	Rollback() error
 	ListRollbackVersions(ctx context.Context) ([]service.RollbackVersion, error)
 	RollbackToVersion(ctx context.Context, version string) error
+}
+
+// systemRollbackResultService is implemented by the concrete update service
+// when a rollback may be delivered asynchronously through the Docker agent.
+// Keep it optional so older integrations and test doubles using the legacy
+// error-only RollbackToVersion method remain source compatible.
+type systemRollbackResultService interface {
+	RollbackToVersionResult(ctx context.Context, version string) (*service.UpdateResult, error)
 }
 
 // NewSystemHandler creates a new SystemHandler
@@ -75,7 +83,8 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 			release(releaseReason, succeeded)
 		}()
 
-		if err := h.updateSvc.PerformUpdate(ctx); err != nil {
+		result, err := h.updateSvc.PerformUpdate(ctx)
+		if err != nil {
 			if errors.Is(err, service.ErrNoUpdateAvailable) {
 				info, checkErr := h.updateSvc.CheckUpdate(ctx, false)
 				if checkErr != nil {
@@ -95,11 +104,18 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 			return nil, err
 		}
 		succeeded = true
+		if result == nil {
+			releaseReason = "SYSTEM_UPDATE_FAILED"
+			return nil, errors.New("update service returned an empty result")
+		}
 
 		return gin.H{
-			"message":      "Update completed. Please restart the service.",
-			"need_restart": true,
-			"operation_id": lock.OperationID(),
+			"message":        result.Message,
+			"need_restart":   result.NeedRestart,
+			"queued":         result.Queued,
+			"target_version": result.TargetVersion,
+			"delivery_mode":  result.DeliveryMode,
+			"operation_id":   lock.OperationID(),
 		}, nil
 	})
 }
@@ -109,7 +125,7 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 func (h *SystemHandler) GetRollbackVersions(c *gin.Context) {
 	versions, err := h.updateSvc.ListRollbackVersions(c.Request.Context())
 	if err != nil {
-		response.Error(c, http.StatusInternalServerError, err.Error())
+		response.ErrorFrom(c, err)
 		return
 	}
 	response.Success(c, gin.H{
@@ -151,8 +167,13 @@ func (h *SystemHandler) Rollback(c *gin.Context) {
 			release(releaseReason, succeeded)
 		}()
 
+		var rollbackResult *service.UpdateResult
 		if targetVersion != "" {
-			err = h.updateSvc.RollbackToVersion(ctx, targetVersion)
+			if resultService, ok := h.updateSvc.(systemRollbackResultService); ok {
+				rollbackResult, err = resultService.RollbackToVersionResult(ctx, targetVersion)
+			} else {
+				err = h.updateSvc.RollbackToVersion(ctx, targetVersion)
+			}
 		} else {
 			err = h.updateSvc.Rollback()
 		}
@@ -161,6 +182,18 @@ func (h *SystemHandler) Rollback(c *gin.Context) {
 			return nil, err
 		}
 		succeeded = true
+
+		if rollbackResult != nil {
+			return gin.H{
+				"message":        rollbackResult.Message,
+				"need_restart":   rollbackResult.NeedRestart,
+				"queued":         rollbackResult.Queued,
+				"target_version": rollbackResult.TargetVersion,
+				"delivery_mode":  rollbackResult.DeliveryMode,
+				"version":        targetVersion,
+				"operation_id":   lock.OperationID(),
+			}, nil
+		}
 
 		return gin.H{
 			"message":      "Rollback completed. Please restart the service.",

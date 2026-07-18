@@ -34,6 +34,8 @@ export default {
     updateNow: 'Update Now',
     updating: 'Updating...',
     updateComplete: 'Update Complete',
+    updateScheduled: 'Update Scheduled',
+    updateScheduledHint: 'The Docker update agent is downloading and applying the new version.',
     updateFailed: 'Update Failed',
     restartRequired: 'Please restart the service to apply the update',
     restartNow: 'Restart Now',

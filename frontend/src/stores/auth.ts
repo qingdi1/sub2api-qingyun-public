@@ -87,8 +87,13 @@ export const useAuthStore = defineStore('auth', () => {
     return !!token.value && !!user.value
   })
 
+  // Demo sessions use a local-only administrator console.  The backend keeps
+  // the virtual identity's JWT role as `user`, and all demo requests are
+  // intercepted by the local adapter before they can reach a real admin
+  // endpoint.  Marking the session as admin here therefore changes only the
+  // browser presentation, never server-side authorization or persistence.
   const isAdmin = computed(() => {
-    return user.value?.role === 'admin'
+    return user.value?.role === 'admin' || user.value?.is_demo === true
   })
 
   const isDemo = computed(() => user.value?.is_demo === true)
@@ -323,9 +328,17 @@ export const useAuthStore = defineStore('auth', () => {
       runMode.value = response.user.run_mode
     }
     const { run_mode: _run_mode, ...userData } = response.user
-    user.value = userData
+    // The backend deliberately reports the virtual demo identity as a
+    // regular user so a demo JWT can never satisfy server-side admin
+    // middleware. The browser demo is a safe, local-only admin walkthrough,
+    // so normalize only the persisted UI identity here. Its requests are
+    // intercepted by the demo adapter and never reach the real API.
+    const sessionUser = userData.is_demo === true
+      ? { ...userData, role: 'admin' as const }
+      : userData
+    user.value = sessionUser
 
-    if (userData.is_demo === true) {
+    if (sessionUser.is_demo === true) {
       // A checkout snapshot may contain provider-specific payment credentials
       // from the previous business account. It must not survive into demo mode.
       clearPaymentRecoverySnapshot(localStorage, PAYMENT_RECOVERY_STORAGE_KEY)
@@ -333,7 +346,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     // Persist to localStorage
     localStorage.setItem(AUTH_TOKEN_KEY, response.access_token)
-    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(userData))
+    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(sessionUser))
     clearPendingAuthSession()
 
     // Start auto-refresh interval for user data

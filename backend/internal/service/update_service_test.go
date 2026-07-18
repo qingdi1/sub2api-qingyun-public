@@ -4,10 +4,14 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,6 +53,28 @@ func (s *updateServiceGitHubClientStub) FetchChecksumFile(context.Context, strin
 	panic("FetchChecksumFile should not be called when no update is available")
 }
 
+type dockerUpdateAgentStub struct {
+	targetVersion         string
+	rollbackTargetVersion string
+	result                *DockerUpdateAgentResult
+	rollbackResult        *DockerUpdateAgentResult
+	err                   error
+	rollbackErr           error
+}
+
+func (s *dockerUpdateAgentStub) QueueUpdate(_ context.Context, targetVersion string) (*DockerUpdateAgentResult, error) {
+	s.targetVersion = targetVersion
+	return s.result, s.err
+}
+
+func (s *dockerUpdateAgentStub) QueueRollback(_ context.Context, targetVersion string) (*DockerUpdateAgentResult, error) {
+	s.rollbackTargetVersion = targetVersion
+	if s.rollbackResult != nil || s.rollbackErr != nil {
+		return s.rollbackResult, s.rollbackErr
+	}
+	return s.result, s.err
+}
+
 func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 	svc := NewUpdateService(
 		&updateServiceCacheStub{},
@@ -62,11 +88,238 @@ func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 		"release",
 	)
 
-	err := svc.PerformUpdate(context.Background())
+	_, err := svc.PerformUpdate(context.Background())
 
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrNoUpdateAvailable))
 	require.ErrorIs(t, err, ErrNoUpdateAvailable)
+}
+
+func TestUpdateServicePerformUpdateQueuesDockerAgentWithServerSelectedVersion(t *testing.T) {
+	agent := &dockerUpdateAgentStub{
+		result: &DockerUpdateAgentResult{Queued: true, Message: "queued by test agent"},
+	}
+	svc := NewUpdateServiceWithDeployment(
+		&updateServiceCacheStub{},
+		&updateServiceGitHubClientStub{release: &GitHubRelease{TagName: "v0.1.159-qingyun.7"}},
+		"0.1.158-qingyun.2",
+		"release",
+		UpdateDeploymentConfig{Mode: UpdateDeploymentModeDockerAgent},
+		agent,
+	)
+
+	result, err := svc.PerformUpdate(context.Background())
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "0.1.159-qingyun.7", agent.targetVersion)
+	require.True(t, result.Queued)
+	require.False(t, result.NeedRestart)
+	require.Equal(t, "0.1.159-qingyun.7", result.TargetVersion)
+	require.Equal(t, UpdateDeploymentModeDockerAgent, result.DeliveryMode)
+	require.Equal(t, "queued by test agent", result.Message)
+}
+
+func TestUpdateServiceDockerManualReturnsStructuredConflict(t *testing.T) {
+	svc := NewUpdateServiceWithDeployment(
+		&updateServiceCacheStub{},
+		&updateServiceGitHubClientStub{release: &GitHubRelease{TagName: "v0.1.159-qingyun.7"}},
+		"0.1.158-qingyun.2",
+		"release",
+		UpdateDeploymentConfig{Mode: UpdateDeploymentModeDockerManual},
+		nil,
+	)
+
+	result, err := svc.PerformUpdate(context.Background())
+
+	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrDockerUpdateManualRequired)
+	appErr := infraerrors.FromError(err)
+	require.EqualValues(t, http.StatusConflict, appErr.Code)
+	require.Equal(t, "UPDATE_DELIVERY_MANUAL_REQUIRED", appErr.Reason)
+	require.Equal(t, UpdateDeploymentModeDockerManual, appErr.Metadata["delivery_mode"])
+	require.Equal(t, "0.1.159-qingyun.7", appErr.Metadata["target_version"])
+}
+
+func TestUpdateServiceDockerAgentWithoutClientReturnsStructuredConflict(t *testing.T) {
+	svc := NewUpdateServiceWithDeployment(
+		&updateServiceCacheStub{},
+		&updateServiceGitHubClientStub{release: &GitHubRelease{TagName: "v0.1.159-qingyun.7"}},
+		"0.1.158-qingyun.2",
+		"release",
+		UpdateDeploymentConfig{Mode: UpdateDeploymentModeDockerAgent},
+		nil,
+	)
+
+	_, err := svc.PerformUpdate(context.Background())
+
+	require.ErrorIs(t, err, ErrDockerUpdateAgentNotConfigured)
+	appErr := infraerrors.FromError(err)
+	require.EqualValues(t, http.StatusConflict, appErr.Code)
+	require.Equal(t, "UPDATE_AGENT_NOT_CONFIGURED", appErr.Reason)
+	require.Equal(t, UpdateDeploymentModeDockerAgent, appErr.Metadata["delivery_mode"])
+	require.Equal(t, "0.1.159-qingyun.7", appErr.Metadata["target_version"])
+}
+
+func TestUpdateServiceAutoSourceBuildReturnsManualDeliveryConflict(t *testing.T) {
+	svc := NewUpdateServiceWithDeployment(
+		&updateServiceCacheStub{},
+		&updateServiceGitHubClientStub{release: &GitHubRelease{TagName: "v0.1.159-qingyun.7"}},
+		"0.1.158-qingyun.2",
+		"source",
+		UpdateDeploymentConfig{Mode: UpdateDeploymentModeAuto},
+		nil,
+	)
+
+	_, err := svc.PerformUpdate(context.Background())
+
+	require.ErrorIs(t, err, ErrDockerUpdateManualRequired)
+	appErr := infraerrors.FromError(err)
+	require.EqualValues(t, http.StatusConflict, appErr.Code)
+	require.Equal(t, UpdateDeploymentModeDockerManual, appErr.Metadata["delivery_mode"])
+}
+
+func TestDockerUpdateAgentClientOnlyPostsServerSelectedVersion(t *testing.T) {
+	const targetVersion = "0.1.159-qingyun.7"
+	const token = "test-update-agent-token"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/v1/update", r.URL.Path)
+		require.Equal(t, "Bearer "+token, r.Header.Get("Authorization"))
+
+		var request dockerUpdateAgentRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		require.Equal(t, targetVersion, request.TargetVersion)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"queued":true,"target_version":"0.1.159-qingyun.7","message":"accepted"}`))
+	}))
+	defer server.Close()
+
+	client := newDockerUpdateAgentClient(server.URL+"/v1/update", token)
+	result, err := client.QueueUpdate(context.Background(), targetVersion)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Queued)
+	require.Equal(t, "accepted", result.Message)
+}
+
+func TestDockerUpdateAgentClientRollbackPostsDedicatedEndpoint(t *testing.T) {
+	const targetVersion = "0.1.158-qingyun.1"
+	const token = "test-update-agent-token"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/v1/rollback", r.URL.Path)
+		require.Equal(t, "Bearer "+token, r.Header.Get("Authorization"))
+
+		var request dockerUpdateAgentRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		require.Equal(t, targetVersion, request.TargetVersion)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"queued":true,"target_version":"0.1.158-qingyun.1","message":"rollback accepted"}`))
+	}))
+	defer server.Close()
+
+	client := newDockerUpdateAgentClient(server.URL+"/v1/update", token)
+	rollbackClient, ok := client.(DockerRollbackAgent)
+	require.True(t, ok)
+	result, err := rollbackClient.QueueRollback(context.Background(), targetVersion)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.Queued)
+	require.Equal(t, "rollback accepted", result.Message)
+}
+
+func TestUpdateServiceDockerAgentRollbackQueuesAllowlistedVersion(t *testing.T) {
+	const targetVersion = "0.1.158-qingyun.1"
+	agent := &dockerUpdateAgentStub{
+		rollbackResult: &DockerUpdateAgentResult{Queued: true, Message: "rollback queued by test agent"},
+	}
+	svc := NewUpdateServiceWithDeployment(
+		&updateServiceCacheStub{},
+		&updateServiceGitHubClientStub{
+			recentReleases: []*GitHubRelease{
+				{TagName: "v" + targetVersion, PublishedAt: "2026-07-17T00:00:00Z"},
+			},
+		},
+		"0.1.158-qingyun.2",
+		"release",
+		UpdateDeploymentConfig{Mode: UpdateDeploymentModeDockerAgent},
+		agent,
+	)
+
+	result, err := svc.RollbackToVersionResult(context.Background(), "v"+targetVersion)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, targetVersion, agent.rollbackTargetVersion)
+	require.True(t, result.Queued)
+	require.False(t, result.NeedRestart)
+	require.Equal(t, targetVersion, result.TargetVersion)
+	require.Equal(t, UpdateDeploymentModeDockerAgent, result.DeliveryMode)
+	require.Equal(t, "rollback queued by test agent", result.Message)
+}
+
+func TestUpdateServiceDockerAgentListsRollbackVersions(t *testing.T) {
+	svc := NewUpdateServiceWithDeployment(
+		&updateServiceCacheStub{},
+		&updateServiceGitHubClientStub{
+			recentReleases: []*GitHubRelease{{TagName: "v0.1.158-qingyun.1"}},
+		},
+		"0.1.158-qingyun.2",
+		"release",
+		UpdateDeploymentConfig{Mode: UpdateDeploymentModeDockerAgent},
+		&dockerUpdateAgentStub{},
+	)
+
+	versions, err := svc.ListRollbackVersions(context.Background())
+	require.NoError(t, err)
+	require.Len(t, versions, 1)
+	require.Equal(t, "0.1.158-qingyun.1", versions[0].Version)
+}
+
+func TestUpdateServiceDockerRollbackNeverUsesBinaryReplacement(t *testing.T) {
+	svc := NewUpdateServiceWithDeployment(
+		&updateServiceCacheStub{},
+		&updateServiceGitHubClientStub{},
+		"0.1.158-qingyun.2",
+		"release",
+		UpdateDeploymentConfig{Mode: UpdateDeploymentModeDockerManual},
+		nil,
+	)
+
+	require.ErrorIs(t, svc.Rollback(), ErrDockerRollbackUnsupported)
+	_, err := svc.ListRollbackVersions(context.Background())
+	require.ErrorIs(t, err, ErrDockerRollbackUnsupported)
+	require.ErrorIs(t, svc.RollbackToVersion(context.Background(), "0.1.158-qingyun.1"), ErrDockerRollbackUnsupported)
+}
+
+func TestUpdateServiceInvalidDeliveryModeRejectsRollback(t *testing.T) {
+	svc := NewUpdateServiceWithDeployment(
+		&updateServiceCacheStub{},
+		&updateServiceGitHubClientStub{},
+		"0.1.158-qingyun.2",
+		"release",
+		UpdateDeploymentConfig{Mode: "not-a-delivery-mode"},
+		nil,
+	)
+
+	_, err := svc.ListRollbackVersions(context.Background())
+	require.Error(t, err)
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "UPDATE_DELIVERY_MODE_INVALID", appErr.Reason)
+	require.Equal(t, "not-a-delivery-mode", appErr.Metadata["delivery_mode"])
+
+	_, err = svc.RollbackToVersionResult(context.Background(), "0.1.158-qingyun.1")
+	require.Error(t, err)
+	appErr = infraerrors.FromError(err)
+	require.Equal(t, "UPDATE_DELIVERY_MODE_INVALID", appErr.Reason)
+	require.Equal(t, "0.1.158-qingyun.1", appErr.Metadata["target_version"])
 }
 
 func newRollbackTestService(current string, releases []*GitHubRelease) *UpdateService {

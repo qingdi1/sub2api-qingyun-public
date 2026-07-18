@@ -158,6 +158,17 @@ type UpdateConfig struct {
 	// 支持 http/https/socks5/socks5h 协议
 	// 例如: "http://127.0.0.1:7890", "socks5://127.0.0.1:1080"
 	ProxyURL string `mapstructure:"proxy_url"`
+
+	// DeploymentMode controls how a released update is delivered. Supported values are
+	// auto, binary, docker-agent, and docker-manual. auto keeps binary releases on the
+	// existing in-place updater, but never tries to replace an executable from a container.
+	DeploymentMode string `mapstructure:"deployment_mode"`
+	// DockerAgentURL is the exact private update-agent endpoint. The application only
+	// sends the release version selected by the server; image and container selection
+	// remain fixed in the agent configuration.
+	DockerAgentURL string `mapstructure:"docker_agent_url"`
+	// DockerAgentToken authenticates requests to DockerAgentURL.
+	DockerAgentToken string `mapstructure:"docker_agent_token"`
 }
 
 type IdempotencyConfig struct {
@@ -2221,6 +2232,12 @@ func setDefaults() {
 	viper.SetDefault("gemini.oauth.scopes", "")
 	viper.SetDefault("gemini.quota.policy", "")
 
+	// Update delivery. auto protects container and source deployments from the
+	// legacy in-place binary updater while retaining it for release binaries.
+	viper.SetDefault("update.deployment_mode", "auto")
+	viper.SetDefault("update.docker_agent_url", "")
+	viper.SetDefault("update.docker_agent_token", "")
+
 	// Subscription Maintenance (bounded queue + worker pool)
 	viper.SetDefault("subscription_maintenance.worker_count", 2)
 	viper.SetDefault("subscription_maintenance.queue_size", 1024)
@@ -2299,6 +2316,24 @@ func (c *Config) Validate() error {
 	}
 	if c.SubscriptionMaintenance.QueueSize < 0 {
 		return fmt.Errorf("subscription_maintenance.queue_size must be non-negative")
+	}
+
+	updateMode := strings.ToLower(strings.TrimSpace(c.Update.DeploymentMode))
+	switch updateMode {
+	case "", "auto", "binary", "docker-agent", "docker-manual":
+	default:
+		return fmt.Errorf("update.deployment_mode must be one of: auto/binary/docker-agent/docker-manual")
+	}
+	if agentURL := strings.TrimSpace(c.Update.DockerAgentURL); agentURL != "" {
+		if err := ValidateAbsoluteHTTPURL(agentURL); err != nil {
+			return fmt.Errorf("update.docker_agent_url invalid: %w", err)
+		}
+	}
+	if updateMode == "docker-agent" && strings.TrimSpace(c.Update.DockerAgentURL) == "" {
+		return fmt.Errorf("update.docker_agent_url is required when update.deployment_mode=docker-agent")
+	}
+	if updateMode == "docker-agent" && strings.TrimSpace(c.Update.DockerAgentToken) == "" {
+		return fmt.Errorf("update.docker_agent_token is required when update.deployment_mode=docker-agent")
 	}
 
 	// Gemini OAuth 配置校验：client_id 与 client_secret 必须同时设置或同时留空。

@@ -1,0 +1,118 @@
+# Qingyun downstream Docker deployment.
+# Pin SUB2API_IMAGE and UPDATE_AGENT_IMAGE to the same public Qingyun release.
+services:
+  sub2api:
+    image: ${SUB2API_IMAGE:?SUB2API_IMAGE must be an exact published Qingyun image}
+    restart: unless-stopped
+    labels:
+      io.qingyun.sub2api.update-target: "true"
+      io.qingyun.sub2api.component: "sub2api"
+    ports:
+      - "${BIND_HOST:-0.0.0.0}:${SERVER_PORT:-8888}:8080"
+    volumes:
+      - ./data_qingyun:/app/data:Z
+    environment:
+      AUTO_SETUP: "true"
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: "8080"
+      SERVER_MODE: ${SERVER_MODE:-release}
+      RUN_MODE: ${RUN_MODE:-standard}
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_USER: ${POSTGRES_USER:-sub2api}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      DATABASE_DBNAME: ${POSTGRES_DB:-sub2api}
+      DATABASE_SSLMODE: disable
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: "0"
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@qingyun.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      DEMO_ACCOUNT_ENABLED: ${DEMO_ACCOUNT_ENABLED:-false}
+      DEMO_ACCOUNT_EMAIL: ${DEMO_ACCOUNT_EMAIL:-demo@qingyun.local}
+      DEMO_ACCOUNT_PASSWORD: ${DEMO_ACCOUNT_PASSWORD:-}
+      DEMO_ACCOUNT_DISPLAY_NAME: ${DEMO_ACCOUNT_DISPLAY_NAME:-Qingyun Demo}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?TOTP_ENCRYPTION_KEY is required}
+      TZ: ${TZ:-Asia/Shanghai}
+      SECURITY_URL_ALLOWLIST_ENABLED: "false"
+      SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP: "false"
+      SECURITY_URL_ALLOW_PRIVATE_HOSTS: "true"
+      UPDATE_DEPLOYMENT_MODE: docker-agent
+      UPDATE_DOCKER_AGENT_URL: http://qingyun-update-agent:8787/v1/update
+      UPDATE_DOCKER_AGENT_TOKEN: ${UPDATE_DOCKER_AGENT_TOKEN:?UPDATE_DOCKER_AGENT_TOKEN is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qingyun-update-agent:
+        condition: service_healthy
+    networks:
+      - sub2api-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    volumes:
+      - ./postgres_data_qingyun:/var/lib/postgresql/data:Z
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sub2api}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-sub2api}
+      PGDATA: /var/lib/postgresql/data
+      TZ: ${TZ:-Asia/Shanghai}
+    networks:
+      - sub2api-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    volumes:
+      - ./redis_data_qingyun:/data:Z
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes", "--appendfsync", "everysec"]
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+    networks:
+      - sub2api-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  qingyun-update-agent:
+    image: ${UPDATE_AGENT_IMAGE:?UPDATE_AGENT_IMAGE must be an exact published Qingyun update-agent image}
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    environment:
+      UPDATE_DOCKER_AGENT_TOKEN: ${UPDATE_DOCKER_AGENT_TOKEN:?UPDATE_DOCKER_AGENT_TOKEN is required}
+      UPDATE_DOCKER_AGENT_LISTEN_ADDR: :8787
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - sub2api-network
+
+networks:
+  sub2api-network:
+    driver: bridge

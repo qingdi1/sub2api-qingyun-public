@@ -3,6 +3,7 @@
     <!-- Admin: Full version badge with dropdown -->
     <template v-if="isAdmin">
       <button
+        ref="triggerRef"
         @click="toggleDropdown"
         class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors"
         :class="[
@@ -27,13 +28,16 @@
       </button>
 
       <!-- Dropdown -->
-      <transition name="dropdown">
-        <div
-          v-if="dropdownOpen"
-          ref="dropdownRef"
-          class="absolute left-0 z-50 mt-2 overflow-hidden whitespace-normal rounded-xl border border-gray-200 bg-white shadow-lg transition-all duration-200 dark:border-dark-700 dark:bg-dark-800"
-          :class="rollbackPanelOpen && isReleaseBuild ? 'w-80' : 'w-64'"
-        >
+      <Teleport to="body">
+        <transition name="dropdown">
+          <div
+            v-if="dropdownOpen"
+            ref="dropdownRef"
+            data-testid="version-dropdown"
+            class="fixed z-[100000030] overflow-x-hidden overflow-y-auto whitespace-normal rounded-xl border border-gray-200 bg-white shadow-lg transition-all duration-200 dark:border-dark-700 dark:bg-dark-800"
+            :class="rollbackPanelOpen && isReleaseBuild ? 'w-80' : 'w-64'"
+            :style="dropdownStyle"
+          >
           <!-- Header with refresh button -->
           <div
             class="flex items-center justify-between border-b border-gray-100 px-4 py-3 dark:border-dark-700"
@@ -231,7 +235,38 @@
                 </button>
               </div>
 
-              <!-- Priority 3: Update available for source build - show git pull hint -->
+              <!-- Priority 3: Docker-agent update accepted - wait for the agent to deploy it -->
+              <div
+                v-else-if="updateSuccess && updateQueued"
+                data-testid="version-update-queued"
+                class="space-y-2"
+              >
+                <div
+                  class="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3 dark:border-blue-800/50 dark:bg-blue-900/20"
+                >
+                  <div
+                    class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/50"
+                  >
+                    <Icon
+                      name="clock"
+                      size="sm"
+                      :stroke-width="2"
+                      class="animate-spin text-blue-600 dark:text-blue-400"
+                    />
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <p class="text-sm font-medium text-blue-700 dark:text-blue-300">
+                      {{ t('version.updateScheduled') }}
+                    </p>
+                    <p class="text-xs text-blue-600/70 dark:text-blue-400/70">
+                      {{ updateMessage || t('version.updateScheduledHint') }}
+                      <span v-if="queuedTargetVersion"> (v{{ queuedTargetVersion }})</span>
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Priority 4: Update available for source build - show git pull hint -->
               <div v-else-if="hasUpdate && !isReleaseBuild" class="space-y-2">
                 <a
                   v-if="releaseInfo?.html_url && releaseInfo.html_url !== '#'"
@@ -291,7 +326,7 @@
                 </div>
               </div>
 
-              <!-- Priority 4: Update available for release build - show update button -->
+              <!-- Priority 5: Update available for release build - show update button -->
               <div v-else-if="hasUpdate && isReleaseBuild" class="space-y-2">
                 <!-- Update info card -->
                 <div
@@ -321,6 +356,7 @@
                 <button
                   @click="handleUpdate"
                   :disabled="updating"
+                  data-testid="version-update-action"
                   class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <svg v-if="updating" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -355,7 +391,7 @@
                 </a>
               </div>
 
-              <!-- Priority 5: Up to date - GitHub link + version rollback -->
+              <!-- Priority 6: Up to date - GitHub link + version rollback -->
               <div v-else class="space-y-2">
                 <a
                   v-if="releaseInfo?.html_url && releaseInfo.html_url !== '#'"
@@ -626,8 +662,9 @@
               </div>
             </template>
           </div>
-        </div>
-      </transition>
+          </div>
+        </transition>
+      </Teleport>
     </template>
 
     <!-- Non-admin: Simple static version text -->
@@ -638,7 +675,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import {
@@ -666,9 +703,13 @@ const authStore = useAuthStore()
 const appStore = useAppStore()
 
 const isAdmin = computed(() => authStore.isAdmin)
+let initialVersionCheckRequested = false
 
 const dropdownOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
+const triggerRef = ref<HTMLButtonElement | null>(null)
+const triggerRect = ref<DOMRect | null>(null)
+const dropdownPlacement = ref<'top' | 'bottom'>('bottom')
 
 // Use store's cached version state
 const loading = computed(() => appStore.versionLoading)
@@ -684,9 +725,17 @@ const restarting = ref(false)
 const needRestart = ref(false)
 const updateError = ref('')
 const updateSuccess = ref(false)
+const updateQueued = ref(false)
+const updateMessage = ref('')
+const queuedTargetVersion = ref('')
 const restartCountdown = ref(0)
+const queuedPollTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+const queuedPollAttempts = ref(0)
 // Distinguishes the success + restart panel between update and rollback flows
 const successKind = ref<'update' | 'rollback'>('update')
+
+const QUEUED_POLL_INTERVAL_MS = 1500
+const QUEUED_POLL_MAX_ATTEMPTS = 80
 
 // Rollback states
 const rollbackPanelOpen = ref(false)
@@ -732,12 +781,131 @@ const activeManualCommand = computed(() =>
 // Only show update check for release builds (binary/docker deployment)
 const isReleaseBuild = computed(() => buildType.value === 'release')
 
+const dropdownWidth = computed(() => (rollbackPanelOpen.value && isReleaseBuild.value ? 320 : 256))
+
+const dropdownStyle = computed<Record<string, string>>(() => {
+  const rect = triggerRect.value
+  if (!rect) return {}
+
+  const viewportPadding = 8
+  const width = dropdownWidth.value
+  const left = Math.min(
+    Math.max(viewportPadding, rect.left),
+    Math.max(viewportPadding, window.innerWidth - width - viewportPadding)
+  )
+  const availableHeight =
+    dropdownPlacement.value === 'top'
+      ? rect.top - viewportPadding * 2
+      : window.innerHeight - rect.bottom - viewportPadding * 2
+  const style: Record<string, string> = {
+    left: `${left}px`,
+    width: `${width}px`,
+    maxHeight: `${Math.max(120, availableHeight)}px`
+  }
+
+  if (dropdownPlacement.value === 'top') {
+    style.bottom = `${window.innerHeight - rect.top + viewportPadding}px`
+  } else {
+    style.top = `${rect.bottom + viewportPadding}px`
+  }
+
+  return style
+})
+
+async function updateDropdownPosition() {
+  if (!dropdownOpen.value || !triggerRef.value) return
+
+  triggerRect.value = triggerRef.value.getBoundingClientRect()
+  await nextTick()
+
+  const rect = triggerRect.value
+  if (!rect) return
+
+  const estimatedHeight = Math.min(dropdownRef.value?.offsetHeight || 360, 360)
+  const spaceBelow = window.innerHeight - rect.bottom - 8
+  const spaceAbove = rect.top - 8
+  dropdownPlacement.value =
+    spaceBelow < estimatedHeight && spaceAbove > spaceBelow ? 'top' : 'bottom'
+}
+
+function handleViewportChange() {
+  void updateDropdownPosition()
+}
+
 function toggleDropdown() {
   dropdownOpen.value = !dropdownOpen.value
+  if (dropdownOpen.value) {
+    void updateDropdownPosition()
+  }
 }
 
 function closeDropdown() {
   dropdownOpen.value = false
+}
+
+function requestInitialVersionCheck() {
+  if (!isAdmin.value || initialVersionCheckRequested) return
+  initialVersionCheckRequested = true
+  void appStore.fetchVersion(false)
+}
+
+function stopQueuedPolling() {
+  if (queuedPollTimer.value !== null) {
+    clearTimeout(queuedPollTimer.value)
+    queuedPollTimer.value = null
+  }
+}
+
+function normalizedVersion(value: unknown): string {
+  return String(value || '').trim().replace(/^v/i, '')
+}
+
+function queuedUpdateReachedTarget(info: { current_version?: string } | null, target: string): boolean {
+  if (!info || !target) return false
+  return normalizedVersion(info.current_version) === normalizedVersion(target)
+}
+
+function finishQueuedOperation(info?: { current_version?: string } | null) {
+  if (!updateQueued.value) return
+  if (info?.current_version) {
+    // Keep the freshly fetched version visible in the badge. The app store
+    // already owns the response and will expose it on the next render.
+    queuedTargetVersion.value = normalizedVersion(info.current_version)
+  }
+  stopQueuedPolling()
+  updateQueued.value = false
+  updateSuccess.value = true
+  needRestart.value = true
+  updateMessage.value = ''
+}
+
+function pollQueuedOperation(targetVersion: string) {
+  stopQueuedPolling()
+  queuedPollAttempts.value = 0
+
+  const poll = async () => {
+    if (!updateQueued.value || !targetVersion) return
+
+    queuedPollAttempts.value += 1
+    const info = await appStore.fetchVersion(true)
+    if (queuedUpdateReachedTarget(info, targetVersion)) {
+      finishQueuedOperation(info)
+      return
+    }
+
+    if (queuedPollAttempts.value >= QUEUED_POLL_MAX_ATTEMPTS) {
+      // Keep the queued card visible so a manual refresh can resume checking;
+      // never expose a restart action before the deployed version is observed.
+      updateMessage.value = t('version.updateScheduledHint')
+      return
+    }
+
+    queuedPollTimer.value = setTimeout(() => {
+      void poll()
+    }, QUEUED_POLL_INTERVAL_MS)
+  }
+
+  void poll()
 }
 
 async function refreshVersion(force = true) {
@@ -745,27 +913,51 @@ async function refreshVersion(force = true) {
 
   // Reset update states when refreshing
   updateError.value = ''
-  updateSuccess.value = false
-  needRestart.value = false
+  if (!updateQueued.value) {
+    updateSuccess.value = false
+    needRestart.value = false
+    updateMessage.value = ''
+    queuedTargetVersion.value = ''
+  }
   resetRollbackState()
 
-  await appStore.fetchVersion(force)
+  const info = await appStore.fetchVersion(force)
+
+  // A manual refresh is also allowed to complete the queued state, but only
+  // after the backend reports the exact target version.
+  if (updateQueued.value && queuedUpdateReachedTarget(info, queuedTargetVersion.value)) {
+    finishQueuedOperation(info)
+  }
 }
 
 async function handleUpdate() {
   if (updating.value) return
 
+  stopQueuedPolling()
   updating.value = true
   updateError.value = ''
   updateSuccess.value = false
+  updateQueued.value = false
+  needRestart.value = false
+  updateMessage.value = ''
+  queuedTargetVersion.value = ''
 
   try {
     const result = await performUpdate()
     successKind.value = 'update'
     updateSuccess.value = true
-    needRestart.value = result.need_restart
-    // Clear version cache to reflect update completed
-    appStore.clearVersionCache()
+    updateQueued.value = result.queued === true || result.update_scheduled === true
+    needRestart.value = !updateQueued.value && result.need_restart === true
+    updateMessage.value = result.message || ''
+    queuedTargetVersion.value = result.target_version || ''
+    if (updateQueued.value) {
+      pollQueuedOperation(queuedTargetVersion.value || latestVersion.value)
+    } else if (result.need_restart === true) {
+      // Keep the fetched version cache intact until the user explicitly
+      // restarts. This prevents the success panel from being replaced by a
+      // stale "update available" state.
+      appStore.clearVersionCache()
+    }
   } catch (error: unknown) {
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     updateError.value = err.response?.data?.message || err.message || t('version.updateFailed')
@@ -837,10 +1029,17 @@ async function handleRollback() {
     const result = await rollbackAPI(selectedRollbackVersion.value)
     successKind.value = 'rollback'
     updateSuccess.value = true
-    needRestart.value = result.need_restart
+    updateQueued.value = result.queued === true || result.update_scheduled === true
+    needRestart.value = !updateQueued.value && result.need_restart === true
+    updateMessage.value = result.message || ''
+    queuedTargetVersion.value = result.target_version || selectedRollbackVersion.value
     rollbackPanelOpen.value = false
-    // Clear version cache so the next check reflects the rolled-back version
-    appStore.clearVersionCache()
+    if (updateQueued.value) {
+      pollQueuedOperation(queuedTargetVersion.value)
+    } else {
+      // Clear version cache so the next check reflects the rolled-back version
+      appStore.clearVersionCache()
+    }
   } catch (error: unknown) {
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     rollbackError.value = err.response?.data?.message || err.message || t('version.rollbackFailed')
@@ -851,6 +1050,14 @@ async function handleRollback() {
 
 async function handleRestart() {
   if (restarting.value) return
+
+  // The demo console is entirely local and has no service process to restart.
+  // Keep the action a harmless no-op instead of attempting a real admin API.
+  if (isDemoSession()) {
+    restarting.value = false
+    restartCountdown.value = 0
+    return
+  }
 
   restarting.value = true
   restartCountdown.value = 8
@@ -913,22 +1120,37 @@ async function checkServiceAndReload() {
 
 function handleClickOutside(event: MouseEvent) {
   const target = event.target as Node
-  const button = (event.target as Element).closest('button')
-  if (dropdownRef.value && !dropdownRef.value.contains(target) && !button?.contains(target)) {
+  if (
+    dropdownRef.value &&
+    !dropdownRef.value.contains(target) &&
+    !triggerRef.value?.contains(target)
+  ) {
     closeDropdown()
   }
 }
 
-onMounted(() => {
-  if (isAdmin.value) {
-    // Use cached version if available, otherwise fetch
-    appStore.fetchVersion(false)
+watch([dropdownOpen, rollbackPanelOpen], ([isOpen]) => {
+  if (isOpen) {
+    void updateDropdownPosition()
   }
+})
+
+watch(isAdmin, (admin) => {
+  if (admin) requestInitialVersionCheck()
+})
+
+onMounted(() => {
+  requestInitialVersionCheck()
   document.addEventListener('click', handleClickOutside)
+  window.addEventListener('resize', handleViewportChange)
+  window.addEventListener('scroll', handleViewportChange, true)
 })
 
 onBeforeUnmount(() => {
+  stopQueuedPolling()
   document.removeEventListener('click', handleClickOutside)
+  window.removeEventListener('resize', handleViewportChange)
+  window.removeEventListener('scroll', handleViewportChange, true)
 })
 </script>
 

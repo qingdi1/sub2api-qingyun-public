@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*-qingyun.*'
   workflow_dispatch:
     inputs:
       tag:
@@ -95,6 +95,24 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      - name: Validate Qingyun release tag
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+        run: |
+          TAG_NAME="$RELEASE_TAG"
+
+          if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-qingyun\.[0-9]+$ ]]; then
+            echo "Qingyun releases must use vX.Y.Z-qingyun.N tags; got $TAG_NAME"
+            exit 1
+          fi
+
+          git fetch origin "${QINGYUN_RELEASE_BRANCH}:refs/remotes/origin/${QINGYUN_RELEASE_BRANCH}"
+          RELEASE_COMMIT=$(git rev-parse "${TAG_NAME}^{commit}")
+          if ! git merge-base --is-ancestor "$RELEASE_COMMIT" "origin/${QINGYUN_RELEASE_BRANCH}"; then
+            echo "Release tag $TAG_NAME is not reachable from ${QINGYUN_RELEASE_BRANCH}"
+            exit 1
+          fi
+
       - name: Download VERSION artifact
         uses: actions/download-artifact@v8
         with:
@@ -172,6 +190,31 @@ jobs:
       - name: Set lowercase owner for GHCR
         id: lowercase
         run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Publish Qingyun update agent
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+        run: |
+          TAG_NAME="$RELEASE_TAG"
+          VERSION=${TAG_NAME#v}
+          IMAGE="ghcr.io/${{ steps.lowercase.outputs.owner }}/sub2api-qingyun-update-agent"
+          PLATFORMS="linux/amd64,linux/arm64"
+          if [ "${SIMPLE_RELEASE}" = "true" ]; then
+            PLATFORMS="linux/amd64"
+          fi
+
+          docker buildx build \
+            --platform "$PLATFORMS" \
+            --file backend/cmd/qingyun-update-agent/Dockerfile \
+            --tag "${IMAGE}:${VERSION}" \
+            --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --label "org.opencontainers.image.version=${VERSION}" \
+            --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
+            --label "org.opencontainers.image.title=Qingyun Sub2API Update Agent" \
+            --label "org.opencontainers.image.description=Private Docker update and rollback agent for Qingyun Sub2API" \
+            --label "org.opencontainers.image.licenses=LGPL-3.0-or-later" \
+            --push \
+            .
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7

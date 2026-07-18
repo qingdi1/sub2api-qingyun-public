@@ -497,8 +497,10 @@ async function handleLogin(): Promise<void> {
     clearAllAffiliateReferralCodes()
     appStore.showSuccess(t('auth.loginSuccess'))
 
-    // Redirect to dashboard or intended route
-    const redirectTo = (router.currentRoute.value.query.redirect as string) || '/dashboard'
+    // Preserve an explicitly requested route; otherwise send administrators
+    // (including the isolated demo administrator console) to their dashboard.
+    const redirectTo = (router.currentRoute.value.query.redirect as string) ||
+      (authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
     await router.push(redirectTo)
   } catch (error: unknown) {
     // Reset Turnstile on error
@@ -531,8 +533,9 @@ async function handle2FAVerify(code: string): Promise<void> {
     clearAllAffiliateReferralCodes()
     appStore.showSuccess(t('auth.loginSuccess'))
 
-    // Redirect to dashboard or intended route
-    const redirectTo = (router.currentRoute.value.query.redirect as string) || '/dashboard'
+    // Match the direct-login route choice after a successful 2FA challenge.
+    const redirectTo = (router.currentRoute.value.query.redirect as string) ||
+      (authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
     await router.push(redirectTo)
   } catch (error: unknown) {
     const err = error as { message?: string; response?: { data?: { message?: string } } }

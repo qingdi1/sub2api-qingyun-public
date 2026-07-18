@@ -393,6 +393,22 @@ describe('useAuthStore', () => {
       const store = useAuthStore()
       expect(store.isAdmin).toBe(false)
     })
+
+    it('presents the isolated demo identity through the administrator console', async () => {
+      mockLogin.mockResolvedValue({
+        access_token: 'demo-token-123',
+        token_type: 'Bearer',
+        user: { ...fakeUser, id: -1, is_demo: true, role: 'user' },
+      })
+      const store = useAuthStore()
+
+      await store.login({ email: 'demo@qingyun.local', password: '123456' })
+
+      expect(store.isDemo).toBe(true)
+      expect(store.isAdmin).toBe(true)
+      expect(store.user?.role).toBe('admin')
+      expect(JSON.parse(localStorage.getItem('auth_user') || '{}').role).toBe('admin')
+    })
   })
 
   // --- refreshUser ---

@@ -19,6 +19,7 @@ import (
 
 type systemHandlerUpdateServiceStub struct {
 	performErr           error
+	performResult        *service.UpdateResult
 	updateInfo           *service.UpdateInfo
 	checkErr             error
 	checkForces          []bool
@@ -37,9 +38,9 @@ func (s *systemHandlerUpdateServiceStub) CheckUpdate(_ context.Context, force bo
 	return s.updateInfo, s.checkErr
 }
 
-func (s *systemHandlerUpdateServiceStub) PerformUpdate(context.Context) error {
+func (s *systemHandlerUpdateServiceStub) PerformUpdate(context.Context) (*service.UpdateResult, error) {
 	s.performCall++
-	return s.performErr
+	return s.performResult, s.performErr
 }
 
 func (s *systemHandlerUpdateServiceStub) Rollback() error {
@@ -58,6 +59,16 @@ func (s *systemHandlerUpdateServiceStub) RollbackToVersion(_ context.Context, ve
 	return s.rollbackToErr
 }
 
+type systemHandlerDockerRollbackStub struct {
+	*systemHandlerUpdateServiceStub
+	rollbackResult    *service.UpdateResult
+	rollbackResultErr error
+}
+
+func (s *systemHandlerDockerRollbackStub) RollbackToVersionResult(context.Context, string) (*service.UpdateResult, error) {
+	return s.rollbackResult, s.rollbackResultErr
+}
+
 type systemUpdateResponseEnvelope struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
@@ -66,16 +77,22 @@ type systemUpdateResponseEnvelope struct {
 		AlreadyUpToDate bool   `json:"already_up_to_date"`
 		CurrentVersion  string `json:"current_version"`
 		LatestVersion   string `json:"latest_version"`
+		NeedRestart     bool   `json:"need_restart"`
+		Queued          bool   `json:"queued"`
+		TargetVersion   string `json:"target_version"`
+		DeliveryMode    string `json:"delivery_mode"`
 		OperationID     string `json:"operation_id"`
 	} `json:"data"`
 }
 
 type systemUpdateErrorEnvelope struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code     int               `json:"code"`
+	Message  string            `json:"message"`
+	Reason   string            `json:"reason"`
+	Metadata map[string]string `json:"metadata"`
 }
 
-func newSystemHandlerTestRouter(t *testing.T, updateSvc *systemHandlerUpdateServiceStub, repo *memoryIdempotencyRepoStub) *gin.Engine {
+func newSystemHandlerTestRouter(t *testing.T, updateSvc systemUpdateService, repo *memoryIdempotencyRepoStub) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	service.SetDefaultIdempotencyCoordinator(nil)
@@ -165,6 +182,65 @@ func TestSystemHandlerPerformUpdateFailureStillReturnsInternalError(t *testing.T
 	require.Equal(t, "internal error", body.Message)
 }
 
+func TestSystemHandlerPerformUpdateReturnsQueuedDockerResult(t *testing.T) {
+	updateSvc := &systemHandlerUpdateServiceStub{
+		performResult: &service.UpdateResult{
+			Message:       "update accepted",
+			NeedRestart:   false,
+			Queued:        true,
+			TargetVersion: "0.1.159-qingyun.7",
+			DeliveryMode:  service.UpdateDeploymentModeDockerAgent,
+		},
+	}
+	repo := newMemoryIdempotencyRepoStub()
+	router := newSystemHandlerTestRouter(t, updateSvc, repo)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/update", nil)
+	req.Header.Set("Idempotency-Key", "docker-queued")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, 1, updateSvc.performCall)
+	requireSystemLockStatus(t, repo, service.IdempotencyStatusSucceeded)
+
+	var body systemUpdateResponseEnvelope
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "update accepted", body.Data.Message)
+	require.True(t, body.Data.Queued)
+	require.False(t, body.Data.NeedRestart)
+	require.Equal(t, "0.1.159-qingyun.7", body.Data.TargetVersion)
+	require.Equal(t, service.UpdateDeploymentModeDockerAgent, body.Data.DeliveryMode)
+	require.NotEmpty(t, body.Data.OperationID)
+}
+
+func TestSystemHandlerPerformUpdateReturnsStructuredDockerDeliveryConflict(t *testing.T) {
+	updateSvc := &systemHandlerUpdateServiceStub{
+		performErr: service.ErrDockerUpdateManualRequired.WithMetadata(map[string]string{
+			"delivery_mode":  service.UpdateDeploymentModeDockerManual,
+			"target_version": "0.1.159-qingyun.7",
+		}),
+	}
+	repo := newMemoryIdempotencyRepoStub()
+	router := newSystemHandlerTestRouter(t, updateSvc, repo)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/update", nil)
+	req.Header.Set("Idempotency-Key", "docker-manual")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusConflict, rec.Code)
+	require.Equal(t, 1, updateSvc.performCall)
+	requireSystemLockStatus(t, repo, service.IdempotencyStatusFailedRetryable)
+
+	var body systemUpdateErrorEnvelope
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, http.StatusConflict, body.Code)
+	require.Equal(t, "UPDATE_DELIVERY_MANUAL_REQUIRED", body.Reason)
+	require.Equal(t, service.UpdateDeploymentModeDockerManual, body.Metadata["delivery_mode"])
+	require.Equal(t, "0.1.159-qingyun.7", body.Metadata["target_version"])
+}
+
 func TestSystemHandlerRollbackWithoutBodyUsesLegacyBackup(t *testing.T) {
 	updateSvc := &systemHandlerUpdateServiceStub{}
 	repo := newMemoryIdempotencyRepoStub()
@@ -203,6 +279,39 @@ func TestSystemHandlerRollbackWithVersionCallsRollbackToVersion(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, 0, body.Code)
 	require.Equal(t, "Rollback completed. Please restart the service.", body.Data.Message)
+}
+
+func TestSystemHandlerRollbackReturnsQueuedDockerResult(t *testing.T) {
+	updateSvc := &systemHandlerDockerRollbackStub{
+		systemHandlerUpdateServiceStub: &systemHandlerUpdateServiceStub{},
+		rollbackResult: &service.UpdateResult{
+			Message:       "rollback accepted",
+			NeedRestart:   false,
+			Queued:        true,
+			TargetVersion: "0.1.158-qingyun.1",
+			DeliveryMode:  service.UpdateDeploymentModeDockerAgent,
+		},
+	}
+	repo := newMemoryIdempotencyRepoStub()
+	router := newSystemHandlerTestRouter(t, updateSvc, repo)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/rollback",
+		strings.NewReader(`{"version":"0.1.158-qingyun.1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "docker-rollback-queued")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	requireSystemLockStatus(t, repo, service.IdempotencyStatusSucceeded)
+
+	var body systemUpdateResponseEnvelope
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "rollback accepted", body.Data.Message)
+	require.True(t, body.Data.Queued)
+	require.False(t, body.Data.NeedRestart)
+	require.Equal(t, "0.1.158-qingyun.1", body.Data.TargetVersion)
+	require.Equal(t, service.UpdateDeploymentModeDockerAgent, body.Data.DeliveryMode)
 }
 
 func TestSystemHandlerRollbackWithDisallowedVersionReturnsBadRequest(t *testing.T) {

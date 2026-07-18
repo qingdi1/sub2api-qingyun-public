@@ -22,7 +22,10 @@ export const DEMO_USER: User = {
   username: 'demo-user',
   email: 'demo@qingyun.local',
   is_demo: true,
-  role: 'user',
+  // The demo console intentionally mirrors the administrator surface. This
+  // is presentation-only; the backend virtual identity and JWT remain a
+  // regular user and every request is handled by this local adapter.
+  role: 'admin',
   balance: 128.88,
   concurrency: 3,
   rpm_limit: 0,
@@ -193,7 +196,7 @@ function hydrateSessionUser(): void {
         ? persisted.avatar_url
         : DEMO_USER.avatar_url,
       id: -1,
-      role: 'user',
+      role: 'admin',
       is_demo: true,
     }
   } catch {
@@ -318,6 +321,139 @@ function modelStats() {
       actual_cost: 0.38,
     },
   ]
+}
+
+function adminDashboardStats() {
+  const now = nowISO()
+  return {
+    total_users: 24,
+    today_new_users: 2,
+    active_users: 8,
+    hourly_active_users: 4,
+    stats_updated_at: now,
+    stats_stale: false,
+    total_api_keys: 18,
+    active_api_keys: 15,
+    total_accounts: 6,
+    normal_accounts: 5,
+    error_accounts: 1,
+    ratelimit_accounts: 0,
+    overload_accounts: 0,
+    total_requests: 128,
+    total_input_tokens: 18240,
+    total_output_tokens: 9120,
+    total_cache_creation_tokens: 0,
+    total_cache_read_tokens: 3580,
+    total_tokens: 30940,
+    total_cost: 1.28,
+    total_actual_cost: 0.96,
+    total_account_cost: 0.72,
+    today_requests: 18,
+    today_input_tokens: 2300,
+    today_output_tokens: 1170,
+    today_cache_creation_tokens: 0,
+    today_cache_read_tokens: 520,
+    today_tokens: 3990,
+    today_cost: 0.18,
+    today_actual_cost: 0.13,
+    today_account_cost: 0.1,
+    average_duration_ms: 680,
+    uptime: 86400,
+    rpm: 2,
+    tpm: 540,
+  }
+}
+
+function adminRealtimeMetrics() {
+  return {
+    active_requests: 1,
+    requests_per_minute: 2,
+    average_response_time: 680,
+    error_rate: 0.01,
+  }
+}
+
+function adminDashboardSnapshot(config: InternalAxiosRequestConfig) {
+  return {
+    generated_at: nowISO(),
+    start_date: String((config.params as Record<string, unknown> | undefined)?.start_date || ''),
+    end_date: String((config.params as Record<string, unknown> | undefined)?.end_date || ''),
+    granularity: String((config.params as Record<string, unknown> | undefined)?.granularity || 'day'),
+    stats: adminDashboardStats(),
+    trend: trend(),
+    models: modelStats(),
+    groups: [{
+      group_id: DEMO_GROUP.id,
+      group_name: DEMO_GROUP.name,
+      requests: 128,
+      total_tokens: 30940,
+      cost: 1.28,
+      actual_cost: 0.96,
+      account_cost: 0.72,
+    }],
+    users_trend: [{
+      date: new Date().toISOString().slice(0, 10),
+      user_id: DEMO_USER.id,
+      email: DEMO_USER.email,
+      username: DEMO_USER.username,
+      requests: 18,
+      tokens: 3990,
+      cost: 0.18,
+      actual_cost: 0.13,
+    }],
+  }
+}
+
+function demoAdminComplianceStatus() {
+  return {
+    required: false,
+    version: 'demo',
+    document_path_zh: 'docs/legal/admin-compliance.zh.md',
+    document_path_en: 'docs/legal/admin-compliance.en.md',
+    document_url_zh: '',
+    document_url_en: '',
+    ack_phrase_zh: '',
+    ack_phrase_en: '',
+  }
+}
+
+function demoAdminSettings() {
+  return {
+    site_name: '青云演示',
+    site_subtitle: '本地模拟数据演示',
+    custom_menu_items: [],
+    ops_monitoring_enabled: false,
+    ops_realtime_monitoring_enabled: false,
+    ops_query_mode_default: 'auto',
+    payment_enabled: false,
+    registration_enabled: false,
+    email_verify_enabled: false,
+    backend_mode_enabled: false,
+    default_subscription_settings: [],
+    auth_source_defaults: {},
+    available_channels_enabled: true,
+  }
+}
+
+function demoAdminPaymentConfig() {
+  return {
+    enabled: false,
+    min_amount: 1,
+    max_amount: 1000,
+    daily_limit: 1000,
+    order_timeout_minutes: 30,
+    max_pending_orders: 1,
+    enabled_payment_types: [],
+    balance_disabled: true,
+    balance_recharge_multiplier: 1,
+    subscription_usd_to_cny_rate: 7,
+    recharge_fee_rate: 0,
+    load_balance_strategy: 'direct',
+    product_name_prefix: '',
+    product_name_suffix: '',
+    help_image_url: '',
+    help_text: '演示账号不会创建真实订单',
+  }
 }
 
 function usageLog() {
@@ -473,6 +609,69 @@ function handleDemoRequest(config: InternalAxiosRequestConfig): unknown {
 
   if (path === '/setup/status') return { needs_setup: false }
   if (path === '/settings/public') return publicSettings()
+
+  // The demo account can browse the full administrator surface, but these
+  // responses are always local fixtures. No admin JWT is sent to the backend
+  // and no operation below can mutate the real database.
+  if (path === '/admin/compliance') return demoAdminComplianceStatus()
+  if (path === '/admin/settings' && method === 'get') return demoAdminSettings()
+  if (path === '/admin/payment/config' && method === 'get') return demoAdminPaymentConfig()
+  if (path === '/admin/system/version' && method === 'get') return { version: '0.1.158-qingyun.1' }
+  if (path === '/admin/system/check-updates' && method === 'get') {
+    return {
+      current_version: '0.1.158-qingyun.1',
+      latest_version: '0.1.158-qingyun.1',
+      has_update: false,
+      cached: true,
+      delivery_mode: 'demo-local',
+      build_type: 'demo',
+    }
+  }
+  if (path === '/admin/system/rollback-versions' && method === 'get') return { versions: [] }
+  if (path === '/admin/dashboard/stats' && method === 'get') return adminDashboardStats()
+  if (path === '/admin/dashboard/realtime' && method === 'get') return adminRealtimeMetrics()
+  if (path === '/admin/dashboard/snapshot-v2' && method === 'get') return adminDashboardSnapshot(config)
+  if (path === '/admin/dashboard/trend' && method === 'get') {
+    return { trend: trend(), start_date: '', end_date: '', granularity: 'day' }
+  }
+  if (path === '/admin/dashboard/models' && method === 'get') return { models: modelStats(), start_date: '', end_date: '' }
+  if (path === '/admin/dashboard/groups' && method === 'get') {
+    return { groups: adminDashboardSnapshot(config).groups, start_date: '', end_date: '' }
+  }
+  if (path === '/admin/dashboard/users-trend' && method === 'get') {
+    return { trend: adminDashboardSnapshot(config).users_trend, start_date: '', end_date: '', granularity: 'day' }
+  }
+  if (path === '/admin/dashboard/users-ranking' && method === 'get') {
+    return {
+      ranking: [{ user_id: DEMO_USER.id, email: DEMO_USER.email, actual_cost: 0.13, requests: 18, tokens: 3990 }],
+      total_actual_cost: 0.13,
+      total_requests: 18,
+      total_tokens: 3990,
+      start_date: '',
+      end_date: '',
+    }
+  }
+  if (path === '/admin/dashboard/user-breakdown' && method === 'get') {
+    return {
+      users: [{ user_id: DEMO_USER.id, email: DEMO_USER.email, requests: 18, input_tokens: 2300, output_tokens: 1170, cache_tokens: 520, total_tokens: 3990, cost: 0.18, actual_cost: 0.13, account_cost: 0.1 }],
+      start_date: '',
+      end_date: '',
+    }
+  }
+  if (path === '/admin/dashboard/api-keys-trend' && method === 'get') return { trend: [], start_date: '', end_date: '', granularity: 'day' }
+  if (path === '/admin/dashboard/users-usage' && method === 'post') return { stats: {} }
+  if (path === '/admin/dashboard/api-keys-usage' && method === 'post') return { stats: {} }
+
+  // Read-only list views get an empty, correctly shaped page so the demo
+  // sidebar can be explored without a request falling through to production.
+  if (path.startsWith('/admin/') && method === 'get') {
+    if (/\/all$/.test(path) || /\/available$/.test(path)) return []
+    if (/\/stats$/.test(path) || /\/summary$/.test(path)) return {}
+    return paginated([], config)
+  }
+  if (path.startsWith('/admin/')) {
+    return { message: '演示操作已完成，数据仅保存在当前页面内，不会写入数据库', demo: true }
+  }
 
   if (path === '/auth/me' || path === '/user/profile') {
     return clone(state.user)

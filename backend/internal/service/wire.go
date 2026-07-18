@@ -30,9 +30,15 @@ func ProvidePricingService(cfg *config.Config, remoteClient PricingRemoteClient)
 	return svc, nil
 }
 
-// ProvideUpdateService creates UpdateService with BuildInfo
-func ProvideUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, buildInfo BuildInfo) *UpdateService {
-	return NewUpdateService(cache, githubClient, buildInfo.Version, buildInfo.BuildType)
+// ProvideUpdateService creates UpdateService with BuildInfo and the server-owned
+// deployment delivery settings. The Docker agent is deliberately configured here,
+// not from request data.
+func ProvideUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, buildInfo BuildInfo, cfg *config.Config) *UpdateService {
+	return NewUpdateServiceWithDeployment(cache, githubClient, buildInfo.Version, buildInfo.BuildType, UpdateDeploymentConfig{
+		Mode:             cfg.Update.DeploymentMode,
+		DockerAgentURL:   cfg.Update.DockerAgentURL,
+		DockerAgentToken: cfg.Update.DockerAgentToken,
+	}, nil)
 }
 
 // ProvideEmailQueueService creates EmailQueueService with default worker count

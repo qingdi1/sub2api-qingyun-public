@@ -83,7 +83,7 @@ describe('demo API adapter', () => {
       username: 'configured-demo-user',
       email: 'configured-demo@example.com',
       id: -1,
-      role: 'user',
+      role: 'admin',
       is_demo: true,
       balance: 128.88,
       balance_notify_enabled: false,
@@ -96,5 +96,29 @@ describe('demo API adapter', () => {
     await apiClient.post('/auth/login', { email: 'demo@qingyun.local', password: 'secret' })
 
     expect(networkAdapter).toHaveBeenCalledTimes(1)
+  })
+
+  it('presents the administrator dashboard from local fixtures only', async () => {
+    const dashboard = await apiClient.get('/admin/dashboard/snapshot-v2')
+    const settings = await apiClient.get('/admin/settings')
+    const compliance = await apiClient.get('/admin/compliance')
+
+    expect(dashboard.data).toEqual(expect.objectContaining({
+      stats: expect.objectContaining({ total_users: 24, total_api_keys: 18 }),
+      trend: expect.any(Array),
+    }))
+    expect(settings.data).toEqual(expect.objectContaining({
+      site_name: '青云演示',
+      ops_monitoring_enabled: false,
+    }))
+    expect(compliance.data).toEqual(expect.objectContaining({ required: false }))
+    expect(networkAdapter).not.toHaveBeenCalled()
+  })
+
+  it('keeps administrator writes in the demo boundary', async () => {
+    const response = await apiClient.put('/admin/settings', { site_name: 'should not persist' })
+
+    expect(response.data).toEqual(expect.objectContaining({ demo: true }))
+    expect(networkAdapter).not.toHaveBeenCalled()
   })
 })

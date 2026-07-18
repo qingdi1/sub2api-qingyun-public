@@ -112,7 +112,7 @@
                 {{ displayName }}
               </div>
               <div class="text-xs capitalize text-gray-500 dark:text-dark-400">
-                {{ user.role }}
+                {{ displayRole }}
               </div>
             </div>
             <Icon name="chevronDown" size="sm" class="hidden text-gray-400 md:block" />
@@ -275,7 +275,7 @@ const balanceFrozenLabel = computed(() => `${balanceFrozenText.value} ${formatHe
 
 // 只在标准模式的管理员下显示新手引导按钮
 const showOnboardingButton = computed(() => {
-  return !authStore.isSimpleMode && user.value?.role === 'admin'
+  return !authStore.isSimpleMode && authStore.isAdmin
 })
 
 const userInitials = computed(() => {
@@ -296,6 +296,10 @@ const displayName = computed(() => {
   if (!user.value) return ''
   return user.value.username || user.value.email?.split('@')[0] || ''
 })
+
+// A demo account is rendered through the local administrator walkthrough,
+// while its backend JWT remains a regular user for server-side isolation.
+const displayRole = computed(() => (authStore.isAdmin ? 'admin' : user.value?.role || 'user'))
 
 const pageTitle = computed(() => {
   // For custom pages, use the menu item's label instead of generic "自定义页面"
