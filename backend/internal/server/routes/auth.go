@@ -34,7 +34,7 @@ func RegisterAuthRoutes(
 		auth.POST("/register", rateLimiter.LimitWithOptions("auth-register", 5, time.Minute, middleware.RateLimitOptions{
 			FailureMode: middleware.RateLimitFailClose,
 		}), h.Auth.Register)
-		auth.POST("/login", rateLimiter.LimitWithOptions("auth-login", 20, time.Minute, middleware.RateLimitOptions{
+		auth.POST("/login", h.Auth.DemoLoginBypass(), rateLimiter.LimitWithOptions("auth-login", 20, time.Minute, middleware.RateLimitOptions{
 			FailureMode: middleware.RateLimitFailClose,
 		}), h.Auth.Login)
 		auth.POST("/login/2fa", rateLimiter.LimitWithOptions("auth-login-2fa", 20, time.Minute, middleware.RateLimitOptions{
@@ -223,6 +223,7 @@ func RegisterAuthRoutes(
 	// 需要认证的当前用户信息
 	authenticated := v1.Group("")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))
+	authenticated.Use(servermiddleware.DemoIsolationGuard())
 	authenticated.Use(servermiddleware.BackendModeUserGuard(settingService))
 	{
 		authenticated.GET("/auth/me", h.Auth.GetCurrentUser)

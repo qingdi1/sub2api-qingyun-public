@@ -15,6 +15,14 @@
       <!-- Header -->
       <AppHeader />
 
+      <div
+        v-if="authStore.isDemo"
+        role="status"
+        class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-sm font-medium text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200"
+      >
+        演示模式 · 当前数据为模拟数据，不会保存
+      </div>
+
       <!-- Main Content -->
       <main class="p-4 md:p-6 lg:p-8">
         <slot />

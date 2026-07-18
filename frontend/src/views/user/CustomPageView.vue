@@ -125,6 +125,7 @@ import { useAdminSettingsStore } from '@/stores/adminSettings'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { buildApiUrl } from '@/api/client'
+import { isDemoSession } from '@/api/demo'
 import { buildEmbeddedUrl, detectTheme } from '@/utils/embedded-url'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -140,6 +141,7 @@ const route = useRoute()
 const appStore = useAppStore()
 const authStore = useAuthStore()
 const adminSettingsStore = useAdminSettingsStore()
+const isDemoMode = computed(() => authStore.user?.is_demo === true || isDemoSession())
 
 const loading = ref(false)
 const pageTheme = ref<'light' | 'dark'>('light')
@@ -174,7 +176,7 @@ const markdownSlug = computed(() => {
 const isMarkdownMode = computed(() => !!markdownSlug.value)
 
 const embeddedUrl = computed(() => {
-  if (!menuItem.value || isMarkdownMode.value) return ''
+  if (isDemoMode.value || !menuItem.value || isMarkdownMode.value) return ''
   return buildEmbeddedUrl(
     menuItem.value.url,
     authStore.user?.id,
@@ -185,7 +187,7 @@ const embeddedUrl = computed(() => {
 })
 
 const isValidUrl = computed(() => {
-  if (isMarkdownMode.value) return false
+  if (isDemoMode.value || isMarkdownMode.value) return false
   const url = embeddedUrl.value
   return url.startsWith('http://') || url.startsWith('https://')
 })
@@ -226,14 +228,19 @@ async function fetchAndRenderMarkdown(slug: string) {
   tocItems.value = []
   activeHeadingId.value = ''
   try {
-    const resp = await fetch(buildApiUrl(`/pages/${encodeURIComponent(slug)}`), {
-      headers: authStore.token ? { Authorization: `Bearer ${authStore.token}` } : {},
-    })
-    if (!resp.ok) {
-      renderedHtml.value = '<p class="text-red-500">Page not found</p>'
-      return
+    let raw: string
+    if (isDemoMode.value) {
+      raw = '# 演示页面\n\n当前显示的是本地模拟内容。演示账号不会加载真实页面、图片或嵌入站点。'
+    } else {
+      const resp = await fetch(buildApiUrl(`/pages/${encodeURIComponent(slug)}`), {
+        headers: authStore.token ? { Authorization: `Bearer ${authStore.token}` } : {},
+      })
+      if (!resp.ok) {
+        renderedHtml.value = '<p class="text-red-500">Page not found</p>'
+        return
+      }
+      raw = await resp.text()
     }
-    let raw = await resp.text()
 
     raw = raw.replace(
       /!\[([^\]]*)\]\(([^)]+)\)/g,

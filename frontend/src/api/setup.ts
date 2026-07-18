@@ -3,6 +3,7 @@
  */
 import axios from 'axios'
 import { buildGatewayUrl } from './url'
+import { isDemoSession } from './demo'
 
 // Create a separate client for setup endpoints (not under /api/v1)
 const setupClient = axios.create({
@@ -62,6 +63,9 @@ export interface InstallResponse {
  * Get setup status
  */
 export async function getSetupStatus(): Promise<SetupStatus> {
+  if (isDemoSession()) {
+    return { needs_setup: false, step: '' }
+  }
   const response = await setupClient.get('/setup/status')
   return response.data.data
 }
@@ -70,6 +74,7 @@ export async function getSetupStatus(): Promise<SetupStatus> {
  * Test database connection
  */
 export async function testDatabase(config: DatabaseConfig): Promise<void> {
+  if (isDemoSession()) return
   await setupClient.post('/setup/test-db', config)
 }
 
@@ -77,6 +82,7 @@ export async function testDatabase(config: DatabaseConfig): Promise<void> {
  * Test Redis connection
  */
 export async function testRedis(config: RedisConfig): Promise<void> {
+  if (isDemoSession()) return
   await setupClient.post('/setup/test-redis', config)
 }
 
@@ -84,6 +90,9 @@ export async function testRedis(config: RedisConfig): Promise<void> {
  * Perform installation
  */
 export async function install(config: InstallRequest): Promise<InstallResponse> {
+  if (isDemoSession()) {
+    return { message: 'Demo mode does not install services.', restart: false }
+  }
   const response = await setupClient.post('/setup/install', config)
   return response.data.data
 }

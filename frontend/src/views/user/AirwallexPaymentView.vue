@@ -32,9 +32,11 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import {
   PAYMENT_RECOVERY_STORAGE_KEY,
+  clearPaymentRecoverySnapshot,
   readPaymentRecoverySnapshot,
   type PaymentRecoverySnapshot,
 } from '@/components/payment/paymentFlow'
+import { isDemoSession } from '@/api/demo'
 
 const { t, locale } = useI18n()
 const route = useRoute()
@@ -90,6 +92,15 @@ function restoreAirwallexSnapshot(): PaymentRecoverySnapshot | null {
 }
 
 onMounted(async () => {
+  if (isDemoSession()) {
+    // A real checkout snapshot can outlive the account that created it. Never
+    // let a demo session restore it, load the provider SDK, or leave the app.
+    clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY)
+    loading.value = false
+    errorMessage.value = '演示账号不会处理真实支付。'
+    return
+  }
+
   const snapshot = restoreAirwallexSnapshot()
   const checkoutLocale = locale.value.toLowerCase().startsWith('zh') ? 'zh' : 'en'
 

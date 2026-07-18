@@ -54,6 +54,9 @@ func SetupRouter(
 
 	// 应用中间件
 	r.Use(middleware2.RequestLogger())
+	// A signed demo token may only bootstrap its virtual profile. Reject it
+	// before every public/authenticated handler so it cannot mutate real state.
+	r.Use(middleware2.DemoTokenGuard(cfg))
 	// 将可信客户端 IP + UA 注入 request context，供 token 签发路径写入会话绑定
 	r.Use(middleware2.SessionBindingContext())
 	r.Use(middleware2.Logger())

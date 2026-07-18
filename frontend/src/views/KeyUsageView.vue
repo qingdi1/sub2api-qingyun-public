@@ -423,6 +423,7 @@ import { useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { buildGatewayUrl } from '@/api/client'
+import { isDemoSession } from '@/api/demo'
 import { formatDateLocalInput } from '@/utils/format'
 import { sanitizeUrl } from '@/utils/url'
 
@@ -856,7 +857,74 @@ function getBrowserTimezone(): string {
 
 // ==================== API Query ====================
 
+function demoUsageResponse() {
+  const now = new Date()
+  const today = formatDateLocalInput(now)
+  const yesterday = formatDateLocalInput(new Date(now.getTime() - 86400000))
+  const resetAt = new Date(now.getTime() + 4 * 60 * 60 * 1000).toISOString()
+
+  return {
+    mode: 'quota_limited',
+    isValid: true,
+    status: 'active',
+    quota: { limit: 10, used: 1.28, remaining: 8.72, unit: 'USD' },
+    rate_limits: [
+      { window: '5h', limit: 2, used: 0.32, reset_at: resetAt },
+      { window: '1d', limit: 5, used: 1.28, reset_at: resetAt },
+    ],
+    usage: {
+      today: {
+        requests: 18,
+        input_tokens: 2300,
+        output_tokens: 1170,
+        cache_creation_tokens: 0,
+        cache_read_tokens: 520,
+        total_tokens: 3990,
+        actual_cost: 0.13,
+      },
+      total: {
+        requests: 128,
+        input_tokens: 16400,
+        output_tokens: 8420,
+        cache_creation_tokens: 110,
+        cache_read_tokens: 3320,
+        total_tokens: 28250,
+        actual_cost: 0.96,
+      },
+      rpm: 0,
+      tpm: 0,
+      average_duration_ms: 680,
+    },
+    daily_usage: [
+      {
+        date: yesterday,
+        requests: 12,
+        input_tokens: 1560,
+        output_tokens: 770,
+        cache_read_tokens: 310,
+        cache_write_tokens: 0,
+        total_tokens: 2640,
+        cost: 0.09,
+        actual_cost: 0.09,
+      },
+      {
+        date: today,
+        requests: 18,
+        input_tokens: 2300,
+        output_tokens: 1170,
+        cache_read_tokens: 520,
+        cache_write_tokens: 0,
+        total_tokens: 3990,
+        cost: 0.13,
+        actual_cost: 0.13,
+      },
+    ],
+    model_stats: [],
+  }
+}
+
 async function fetchUsage(key: string) {
+  if (isDemoSession()) return demoUsageResponse()
   const dateParams = getDateParams()
   const url = buildGatewayUrl('/v1/usage') + (dateParams ? '?' + dateParams : '')
   const res = await fetch(url, {

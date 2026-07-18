@@ -209,6 +209,24 @@ describe('fetchBatch', () => {
   })
 })
 
+describe('demo session isolation', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    localStorage.setItem('auth_user', JSON.stringify({ id: -1, is_demo: true, role: 'user' }))
+    global.fetch = vi.fn().mockRejectedValue(new Error('demo must not call the geolocation provider'))
+  })
+
+  it('returns a local no-lookup state for single and batch requests', async () => {
+    await fetchOne('8.8.4.4')
+    const batchOk = await fetchBatch(['8.8.4.4', '1.1.1.1'])
+
+    expect(getEntry('8.8.4.4').status).toBe('private')
+    expect(getEntry('1.1.1.1').status).toBe('private')
+    expect(batchOk).toBe(true)
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+})
+
 describe('ipGeoLookup localStorage persistence', () => {
   beforeEach(() => {
     localStorage.clear()

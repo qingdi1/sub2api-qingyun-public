@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -76,6 +79,15 @@ type LoginRequest struct {
 	TurnstileToken string `json:"turnstile_token"`
 }
 
+const maxDemoLoginBodyBytes = 64 * 1024
+
+type replayLoginRequestBody struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (b *replayLoginRequestBody) Close() error { return b.closer.Close() }
+
 // AuthResponse 认证响应格式（匹配前端期望）
 type AuthResponse struct {
 	AccessToken  string    `json:"access_token"`
@@ -100,6 +112,20 @@ func ensureLoginUserActive(user *service.User) error {
 func (h *AuthHandler) respondWithTokenPair(c *gin.Context, user *service.User) {
 	if err := ensureLoginUserActive(user); err != nil {
 		response.ErrorFrom(c, err)
+		return
+	}
+	if user.IsDemo {
+		token, err := h.authService.GenerateToken(c.Request.Context(), user)
+		if err != nil {
+			response.InternalError(c, "Failed to generate demo token")
+			return
+		}
+		response.Success(c, AuthResponse{
+			AccessToken: token,
+			ExpiresIn:   h.authService.GetAccessTokenExpiresIn(),
+			TokenType:   "Bearer",
+			User:        dto.UserFromService(user),
+		})
 		return
 	}
 
@@ -224,6 +250,24 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	// Demo login is entirely process-local: no CAPTCHA dependency, user lookup,
+	// login activity write, refresh-token state, or audit record is created.
+	if h.authService.MatchesDemoCredentials(req.Email, req.Password) {
+		token, user, err := h.authService.Login(c.Request.Context(), req.Email, req.Password)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		middleware2.SkipAudit(c)
+		response.Success(c, AuthResponse{
+			AccessToken: token,
+			ExpiresIn:   h.authService.GetAccessTokenExpiresIn(),
+			TokenType:   "Bearer",
+			User:        dto.UserFromService(user),
+		})
+		return
+	}
+
 	// Turnstile 验证
 	if err := h.authService.VerifyTurnstile(c.Request.Context(), req.TurnstileToken, ip.GetClientIP(c)); err != nil {
 		response.ErrorFrom(c, err)
@@ -262,6 +306,38 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 
 	h.respondWithTokenPair(c, user)
+}
+
+// DemoLoginBypass sits before the normal Redis-backed login rate limiter. It
+// only handles an exact match for the explicitly configured demo credentials;
+// every normal login continues into the existing rate limit and auth flow.
+func (h *AuthHandler) DemoLoginBypass() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if h == nil || h.authService == nil || h.authService.DemoUser() == nil || c.Request == nil || c.Request.Body == nil {
+			c.Next()
+			return
+		}
+
+		originalBody := c.Request.Body
+		raw, err := io.ReadAll(io.LimitReader(originalBody, maxDemoLoginBodyBytes+1))
+		c.Request.Body = &replayLoginRequestBody{
+			Reader: io.MultiReader(bytes.NewReader(raw), originalBody),
+			closer: originalBody,
+		}
+		if err != nil || len(raw) > maxDemoLoginBodyBytes {
+			c.Next()
+			return
+		}
+
+		var req LoginRequest
+		if err := json.Unmarshal(raw, &req); err != nil || !h.authService.MatchesDemoCredentials(req.Email, req.Password) {
+			c.Next()
+			return
+		}
+
+		h.Login(c)
+		c.Abort()
+	}
 }
 
 // TotpLoginResponse represents the response when 2FA is required
@@ -409,6 +485,27 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 		return
 	}
 
+	type UserResponse struct {
+		userProfileResponse
+		RunMode string `json:"run_mode"`
+	}
+
+	runMode := config.RunModeStandard
+	if h.cfg != nil {
+		runMode = h.cfg.RunMode
+	}
+
+	// JWT middleware places the virtual identity in context. Keep /auth/me as
+	// the sole backend endpoint available to demo sessions, and never resolve
+	// it through UserService or an identity repository.
+	if demoUser, isDemo := middleware2.GetDemoUserFromContext(c); isDemo {
+		response.Success(c, UserResponse{
+			userProfileResponse: userProfileResponseFromService(demoUser, service.UserIdentitySummarySet{}),
+			RunMode:             runMode,
+		})
+		return
+	}
+
 	user, err := h.userService.GetByID(c.Request.Context(), subject.UserID)
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -419,16 +516,6 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
-	}
-
-	type UserResponse struct {
-		userProfileResponse
-		RunMode string `json:"run_mode"`
-	}
-
-	runMode := config.RunModeStandard
-	if h.cfg != nil {
-		runMode = h.cfg.RunMode
 	}
 
 	response.Success(c, UserResponse{

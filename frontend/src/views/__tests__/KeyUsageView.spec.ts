@@ -207,6 +207,32 @@ describe('KeyUsageView daily detail', () => {
     wrapper.unmount()
   })
 
+  it('uses local simulated usage without calling the gateway for a demo session', async () => {
+    localStorage.setItem('auth_user', JSON.stringify({ id: -1, is_demo: true, role: 'user' }))
+    vi.mocked(fetch).mockRejectedValue(new Error('a demo query must not call fetch'))
+
+    const wrapper = mount(KeyUsageView, {
+      global: {
+        stubs: {
+          RouterLink: { template: '<a><slot /></a>' },
+          LocaleSwitcher: true,
+          Icon: true,
+        },
+      },
+    })
+
+    await wrapper.find('input').setValue('sk-real-key-must-stay-local')
+    await wrapper.find('input').trigger('keydown.enter')
+    await flushPromises()
+    await nextTick()
+
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('18')
+    expect(showSuccess).toHaveBeenCalledWith('Query successful')
+
+    wrapper.unmount()
+  })
+
   it('queries the current local calendar date near midnight', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 6, 13, 0, 30))

@@ -102,7 +102,12 @@ import { paymentAPI } from '@/api/payment'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import { isMobileDevice } from '@/utils/device'
 import { formatPaymentAmount, normalizePaymentCurrency } from '@/components/payment/currency'
-import { PAYMENT_RECOVERY_STORAGE_KEY, readPaymentRecoverySnapshot } from '@/components/payment/paymentFlow'
+import {
+  PAYMENT_RECOVERY_STORAGE_KEY,
+  clearPaymentRecoverySnapshot,
+  readPaymentRecoverySnapshot,
+} from '@/components/payment/paymentFlow'
+import { isDemoSession } from '@/api/demo'
 import type { PaymentOrder } from '@/types/payment'
 import type { Stripe, StripeElements } from '@stripe/stripe-js'
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -134,6 +139,15 @@ let elementsInstance: StripeElements | null = null
 let redirectTimer: ReturnType<typeof setTimeout> | null = null
 
 onMounted(async () => {
+  if (isDemoSession()) {
+    // A route in browser history can still contain a real client secret. Do
+    // not restore payment state, fetch configuration, or load Stripe for demo.
+    clearPaymentRecoverySnapshot(window.localStorage, PAYMENT_RECOVERY_STORAGE_KEY)
+    loading.value = false
+    initError.value = '演示账号不会处理真实支付。'
+    return
+  }
+
   const orderId = Number(route.query.order_id)
   const clientSecret = String(route.query.client_secret || '')
   const method = String(route.query.method || '')

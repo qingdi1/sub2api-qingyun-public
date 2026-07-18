@@ -131,4 +131,26 @@ describe('AirwallexPaymentView', () => {
     expect(airwallexInit).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('payment.airwallexMissingParams')
   })
+
+  it('演示会话会清理遗留的支付恢复状态，且不加载收银台', async () => {
+    routeState.query = {
+      order_id: '101',
+      out_trade_no: 'sub2_awx_101',
+      resume_token: 'resume-awx',
+    }
+    window.localStorage.setItem('auth_user', JSON.stringify({ id: -1, is_demo: true, role: 'user' }))
+    window.localStorage.setItem(
+      PAYMENT_RECOVERY_STORAGE_KEY,
+      JSON.stringify(airwallexSnapshot()),
+    )
+
+    const wrapper = mountView()
+    await flushPromises()
+    await flushPromises()
+
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
+    expect(airwallexInit).not.toHaveBeenCalled()
+    expect(redirectToCheckout).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('演示账号不会处理真实支付。')
+  })
 })

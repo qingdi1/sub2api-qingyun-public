@@ -13,6 +13,13 @@ import (
 // Must be placed AFTER JWT auth middleware so that the user role is available in context.
 func BackendModeUserGuard(settingService *service.SettingService) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// DemoIsolationGuard permits only /auth/me for this virtual user. Let that
+		// bootstrap request pass even when backend mode is enabled, without
+		// weakening backend mode for any persisted user.
+		if IsDemoRequest(c) {
+			c.Next()
+			return
+		}
 		if settingService == nil || !settingService.IsBackendModeEnabled(c.Request.Context()) {
 			c.Next()
 			return

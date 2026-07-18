@@ -648,6 +648,7 @@ import {
   rollback as rollbackAPI,
   type RollbackVersionInfo
 } from '@/api/admin/system'
+import { isDemoSession } from '@/api/demo'
 import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
 
@@ -874,6 +875,14 @@ async function handleRestart() {
 }
 
 async function checkServiceAndReload() {
+  if (isDemoSession()) {
+    // Demo sessions have no deployable service behind them. Treat the local
+    // simulation as healthy and leave the current page intact.
+    restarting.value = false
+    restartCountdown.value = 0
+    return true
+  }
+
   const maxRetries = 5
   const retryDelay = 1000
 
@@ -886,7 +895,7 @@ async function checkServiceAndReload() {
       if (response.ok) {
         // Service is back, reload page
         window.location.reload()
-        return
+        return true
       }
     } catch {
       // Service not ready yet
@@ -899,6 +908,7 @@ async function checkServiceAndReload() {
 
   // After retries, reload anyway
   window.location.reload()
+  return false
 }
 
 function handleClickOutside(event: MouseEvent) {

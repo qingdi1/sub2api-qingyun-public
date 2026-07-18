@@ -12,6 +12,7 @@ import {
   shouldMarkAdminUIRequest,
   shouldMarkUserUIRequest,
 } from './adminUIRequest'
+import { demoAdapter, shouldMockDemoEndpoint } from './demo'
 import { getAPIBaseURL } from './url'
 export { buildApiUrl, buildGatewayUrl } from './url'
 
@@ -88,6 +89,13 @@ apiClient.interceptors.request.use(
       if (shouldMarkUserUIRequest(requestURL)) {
         config.headers[USER_UI_REQUEST_HEADER] = '1'
       }
+    }
+
+    // The demonstration account is a frontend-only data boundary. Its initial
+    // login reaches the backend before a demo session exists; once persisted,
+    // every request is handled by the local adapter.
+    if (shouldMockDemoEndpoint(config.url)) {
+      config.adapter = demoAdapter
     }
 
     return config

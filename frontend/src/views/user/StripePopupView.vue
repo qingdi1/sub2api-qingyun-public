@@ -59,6 +59,7 @@ import { useRoute } from 'vue-router'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import { isMobileDevice } from '@/utils/device'
 import { buildApiUrl } from '@/api/client'
+import { isDemoSession } from '@/api/demo'
 
 interface StripeWithWechatPay {
   confirmWechatPayPayment(clientSecret: string, options: Record<string, unknown>): Promise<{ error?: { message?: string }; paymentIntent?: { status: string } }>
@@ -69,6 +70,7 @@ const METHOD_COLORS: Record<string, string> = {
   wechat_pay: '#07C160',
 }
 const DEFAULT_METHOD_COLOR = '#635bff'
+const DEMO_PAYMENT_MESSAGE = '演示账号不会处理真实支付。'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -97,6 +99,11 @@ function clearInitTimeout() {
 }
 
 onMounted(() => {
+  if (isDemoSession()) {
+    error.value = DEMO_PAYMENT_MESSAGE
+    return
+  }
+
   messageHandler = (event: MessageEvent) => {
     if (event.origin !== window.location.origin) return
     if (event.data?.type !== 'STRIPE_POPUP_INIT') return
@@ -132,6 +139,11 @@ onUnmounted(() => {
 })
 
 async function initStripe(clientSecret: string, publishableKey: string) {
+  if (isDemoSession()) {
+    error.value = DEMO_PAYMENT_MESSAGE
+    return
+  }
+
   if (!clientSecret || !publishableKey) {
     error.value = t('payment.stripeMissingParams')
     return
@@ -169,6 +181,11 @@ async function initStripe(clientSecret: string, publishableKey: string) {
 }
 
 function startPolling() {
+  if (isDemoSession()) {
+    error.value = DEMO_PAYMENT_MESSAGE
+    return
+  }
+
   let inFlight = false
   pollTimer = setInterval(async () => {
     // 防重入：接口响应慢于轮询间隔时避免并发重叠请求。

@@ -172,6 +172,11 @@ func validateJWTForAdmin(
 		AbortWithError(c, 401, "INVALID_TOKEN", "Invalid token")
 		return false
 	}
+	if claims.Demo {
+		// A demo JWT is never an administrator and must not trigger a user lookup.
+		AbortWithError(c, 403, "DEMO_ADMIN_FORBIDDEN", "Demo account cannot access admin endpoints")
+		return false
+	}
 
 	// 从数据库获取用户
 	user, err := userService.GetByID(c.Request.Context(), claims.UserID)

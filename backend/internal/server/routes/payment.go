@@ -24,6 +24,7 @@ func RegisterPaymentRoutes(
 	// --- User-facing payment endpoints (authenticated) ---
 	authenticated := v1.Group("/payment")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))
+	authenticated.Use(middleware.DemoIsolationGuard())
 	authenticated.Use(middleware.BackendModeUserGuard(settingService))
 	{
 		authenticated.GET("/config", paymentHandler.GetPaymentConfig)

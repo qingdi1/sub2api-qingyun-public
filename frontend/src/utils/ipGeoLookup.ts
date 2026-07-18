@@ -1,4 +1,5 @@
 import { reactive } from 'vue'
+import { isDemoSession } from '@/api/demo'
 
 export type IpGeoStatus = 'idle' | 'loading' | 'success' | 'error' | 'private'
 
@@ -21,6 +22,7 @@ export interface IpGeoEntry {
 }
 
 const IDLE_ENTRY: IpGeoEntry = { status: 'idle' }
+const DEMO_ENTRY: IpGeoEntry = { status: 'private' }
 const CACHE_STORAGE_KEY = 'sub2api:ip-geo-cache:v1'
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const BATCH_CHUNK_SIZE = 50
@@ -99,9 +101,12 @@ function persistToStorage(): void {
   }
 }
 
-loadFromStorage()
+if (!isDemoSession()) {
+  loadFromStorage()
+}
 
 export function getEntry(ip: string): IpGeoEntry {
+  if (isDemoSession()) return DEMO_ENTRY
   return getFreshEntry(ip) ?? IDLE_ENTRY
 }
 
@@ -152,6 +157,11 @@ function applyResult(ip: string, raw: RawGeoResponse | undefined): void {
 }
 
 export async function fetchOne(ip: string, force = false): Promise<void> {
+  if (isDemoSession()) {
+    // getEntry() supplies the local no-lookup state. Do not alter a real
+    // session's in-memory cache while a demo session is active.
+    return
+  }
   if (isPrivateIp(ip)) {
     cache.set(ip, { status: 'private' })
     return
@@ -177,6 +187,9 @@ export async function fetchOne(ip: string, force = false): Promise<void> {
 
 export async function fetchBatch(ips: string[]): Promise<boolean> {
   const unique = Array.from(new Set(ips))
+  if (isDemoSession()) {
+    return true
+  }
   const targets: string[] = []
   for (const ip of unique) {
     if (isPrivateIp(ip)) {

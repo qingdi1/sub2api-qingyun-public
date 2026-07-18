@@ -18,6 +18,7 @@ func RegisterUserRoutes(
 ) {
 	authenticated := v1.Group("")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))
+	authenticated.Use(middleware.DemoIsolationGuard())
 	authenticated.Use(middleware.BackendModeUserGuard(settingService))
 	// 用户管理面变更类操作入审计（含 TOTP 启用/禁用、step-up 验证、密码修改等安全事件）
 	authenticated.Use(gin.HandlerFunc(auditLog))

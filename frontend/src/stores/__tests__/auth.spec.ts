@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useAuthStore } from '@/stores/auth'
+import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
 
 // Mock authAPI
 const mockLogin = vi.fn()
@@ -77,6 +78,41 @@ describe('useAuthStore', () => {
       expect(store.isAuthenticated).toBe(true)
       expect(localStorage.getItem('auth_token')).toBe('test-token-123')
       expect(localStorage.getItem('auth_user')).toBe(JSON.stringify(fakeUser))
+    })
+
+    it('clears stale refresh state when the new login has no refresh token', async () => {
+      mockLogin.mockResolvedValueOnce(fakeAuthResponse)
+      const store = useAuthStore()
+
+      await store.login({ email: 'test@example.com', password: '123456' })
+      expect(localStorage.getItem('refresh_token')).toBe('refresh-token-456')
+
+      mockLogin.mockResolvedValueOnce({
+        access_token: 'demo-token-123',
+        token_type: 'Bearer',
+        user: { ...fakeUser, id: -1, is_demo: true },
+      })
+      await store.login({ email: 'demo@qingyun.local', password: '123456' })
+
+      expect(localStorage.getItem('refresh_token')).toBeNull()
+      expect(localStorage.getItem('token_expires_at')).toBeNull()
+      expect(vi.getTimerCount()).toBe(1) // only the user-data polling interval remains
+      expect(mockRefreshToken).not.toHaveBeenCalled()
+    })
+
+    it('clears a prior account payment recovery snapshot when entering demo mode', async () => {
+      localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify({ clientSecret: 'prior-account-secret' }))
+      mockLogin.mockResolvedValue({
+        access_token: 'demo-token-123',
+        token_type: 'Bearer',
+        user: { ...fakeUser, id: -1, is_demo: true },
+      })
+      const store = useAuthStore()
+
+      await store.login({ email: 'demo@qingyun.local', password: '123456' })
+
+      expect(store.isDemo).toBe(true)
+      expect(localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
     })
 
     it('登录失败时清除状态并抛出错误', async () => {
@@ -210,6 +246,23 @@ describe('useAuthStore', () => {
       store.checkAuth()
 
       expect(store.isAuthenticated).toBe(true)
+    })
+
+    it('removes stale refresh credentials when restoring a demo session', () => {
+      localStorage.setItem('auth_token', 'demo-token')
+      localStorage.setItem('auth_user', JSON.stringify({ ...fakeUser, id: -1, is_demo: true }))
+      localStorage.setItem('refresh_token', 'real-account-refresh-token')
+      localStorage.setItem('token_expires_at', String(Date.now() + 3600_000))
+      mockGetCurrentUser.mockResolvedValue({ data: { ...fakeUser, id: -1, is_demo: true } })
+
+      const store = useAuthStore()
+      store.checkAuth()
+
+      expect(store.isDemo).toBe(true)
+      expect(localStorage.getItem('refresh_token')).toBeNull()
+      expect(localStorage.getItem('token_expires_at')).toBeNull()
+      expect(vi.getTimerCount()).toBe(1) // user-data polling only
+      expect(mockRefreshToken).not.toHaveBeenCalled()
     })
 
     it('恢复持久化 pending auth session', () => {

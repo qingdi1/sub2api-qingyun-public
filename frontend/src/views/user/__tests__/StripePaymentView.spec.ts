@@ -62,6 +62,7 @@ vi.mock('@stripe/stripe-js', () => ({
 
 import StripePaymentView from '../StripePaymentView.vue'
 import { formatPaymentAmount } from '@/components/payment/currency'
+import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
 import type { PaymentOrder } from '@/types/payment'
 
 function orderFactory(overrides: Partial<PaymentOrder> = {}): PaymentOrder {
@@ -130,5 +131,20 @@ describe('StripePaymentView', () => {
     expect(getOrder).toHaveBeenCalledWith(42)
     expect(loadStripe).toHaveBeenCalledWith('pk_test')
     expect(wrapper.text()).toContain(formatPaymentAmount(103, 'HKD', 'zh-CN'))
+  })
+
+  it('演示会话会丢弃旧的支付恢复数据，且不查询或加载 Stripe', async () => {
+    window.localStorage.setItem('auth_user', JSON.stringify({ id: -1, is_demo: true, role: 'user' }))
+    window.localStorage.setItem(PAYMENT_RECOVERY_STORAGE_KEY, JSON.stringify({ clientSecret: 'prior-account-secret' }))
+
+    const wrapper = mountView()
+    await flushPromises()
+    await flushPromises()
+
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toBeNull()
+    expect(getOrder).not.toHaveBeenCalled()
+    expect(paymentStore.fetchConfig).not.toHaveBeenCalled()
+    expect(loadStripe).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('演示账号不会处理真实支付。')
   })
 })

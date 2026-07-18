@@ -7,7 +7,10 @@ import (
 )
 
 type User struct {
-	ID             int64
+	ID int64
+	// IsDemo identifies the process-local demo identity. It is never persisted
+	// and must not be allowed to enter regular user services.
+	IsDemo         bool
 	Email          string
 	Username       string
 	Notes          string

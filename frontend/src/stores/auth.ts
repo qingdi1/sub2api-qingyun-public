@@ -7,6 +7,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, readonly } from 'vue'
 import { authAPI, isTotp2FARequired, type LoginResponse } from '@/api'
 import type { User, LoginRequest, RegisterRequest, AuthResponse } from '@/types'
+import { PAYMENT_RECOVERY_STORAGE_KEY, clearPaymentRecoverySnapshot } from '@/components/payment/paymentFlow'
 
 const AUTH_TOKEN_KEY = 'auth_token'
 const AUTH_USER_KEY = 'auth_user'
@@ -90,6 +91,8 @@ export const useAuthStore = defineStore('auth', () => {
     return user.value?.role === 'admin'
   })
 
+  const isDemo = computed(() => user.value?.is_demo === true)
+
   const isSimpleMode = computed(() => runMode.value === 'simple')
   const hasPendingAuthSession = computed(() => pendingAuthSession.value !== null)
 
@@ -111,8 +114,16 @@ export const useAuthStore = defineStore('auth', () => {
       try {
         token.value = savedToken
         user.value = JSON.parse(savedUser)
-        refreshTokenValue.value = savedRefreshToken
-        tokenExpiresAt.value = savedExpiresAt ? parseInt(savedExpiresAt, 10) : null
+        if (user.value?.is_demo === true) {
+          // A demo session never owns refresh credentials. Clear old browser
+          // state from a previously logged-in business account before any
+          // refresh timer can be scheduled or checkout can be resumed.
+          clearRefreshState()
+          clearPaymentRecoverySnapshot(localStorage, PAYMENT_RECOVERY_STORAGE_KEY)
+        } else {
+          refreshTokenValue.value = savedRefreshToken
+          tokenExpiresAt.value = savedExpiresAt ? parseInt(savedExpiresAt, 10) : null
+        }
 
         // Immediately refresh user data from backend (async, don't block)
         refreshUser().catch((error) => {
@@ -124,7 +135,7 @@ export const useAuthStore = defineStore('auth', () => {
 
         // Start proactive token refresh if we have refresh token and expiry info
         // Note: use !== null to handle case when tokenExpiresAt.value is 0 (expired)
-        if (savedRefreshToken && tokenExpiresAt.value !== null) {
+        if (user.value?.is_demo !== true && savedRefreshToken && tokenExpiresAt.value !== null) {
           scheduleTokenRefreshAt(tokenExpiresAt.value)
         }
       } catch (error) {
@@ -202,6 +213,11 @@ export const useAuthStore = defineStore('auth', () => {
    * Perform the actual token refresh
    */
   async function performTokenRefresh(): Promise<void> {
+    if (user.value?.is_demo === true) {
+      clearRefreshState()
+      return
+    }
+
     if (!refreshTokenValue.value) {
       return
     }
@@ -229,6 +245,14 @@ export const useAuthStore = defineStore('auth', () => {
       clearTimeout(tokenRefreshTimeoutId)
       tokenRefreshTimeoutId = null
     }
+  }
+
+  function clearRefreshState(): void {
+    stopTokenRefresh()
+    refreshTokenValue.value = null
+    tokenExpiresAt.value = null
+    localStorage.removeItem(REFRESH_TOKEN_KEY)
+    localStorage.removeItem(TOKEN_EXPIRES_AT_KEY)
   }
 
   /**
@@ -283,6 +307,11 @@ export const useAuthStore = defineStore('auth', () => {
     // Store token and user
     token.value = response.access_token
 
+    // A new login must replace the complete refresh-token state. In particular,
+    // the isolated demo account intentionally has no refresh token; retaining a
+    // prior account's token here could refresh into the wrong session.
+    clearRefreshState()
+
     // Store refresh token if present
     if (response.refresh_token) {
       refreshTokenValue.value = response.refresh_token
@@ -295,6 +324,12 @@ export const useAuthStore = defineStore('auth', () => {
     }
     const { run_mode: _run_mode, ...userData } = response.user
     user.value = userData
+
+    if (userData.is_demo === true) {
+      // A checkout snapshot may contain provider-specific payment credentials
+      // from the previous business account. It must not survive into demo mode.
+      clearPaymentRecoverySnapshot(localStorage, PAYMENT_RECOVERY_STORAGE_KEY)
+    }
 
     // Persist to localStorage
     localStorage.setItem(AUTH_TOKEN_KEY, response.access_token)
@@ -365,7 +400,10 @@ export const useAuthStore = defineStore('auth', () => {
 
       // Start proactive token refresh if we have refresh token and expiry info
       // Note: use !== null to handle case when tokenExpiresAt.value is 0 (expired)
-      if (savedRefreshToken && tokenExpiresAt.value !== null) {
+      if (userData.is_demo === true) {
+        clearRefreshState()
+        clearPaymentRecoverySnapshot(localStorage, PAYMENT_RECOVERY_STORAGE_KEY)
+      } else if (savedRefreshToken && tokenExpiresAt.value !== null) {
         scheduleTokenRefreshAt(tokenExpiresAt.value)
       }
 
@@ -481,6 +519,7 @@ export const useAuthStore = defineStore('auth', () => {
     // Computed
     isAuthenticated,
     isAdmin,
+    isDemo,
     isSimpleMode,
     hasPendingAuthSession,
 

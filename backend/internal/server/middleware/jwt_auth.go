@@ -68,6 +68,26 @@ func jwtAuth(
 			return
 		}
 
+		// Demo identities are configuration-backed virtual users. Validate their
+		// current config binding and inject the in-memory subject before any user
+		// repository, session-binding, token-version, or activity-touch path.
+		if claims.Demo {
+			user, ok := authService.DemoUserFromClaims(claims)
+			if !ok {
+				AbortWithError(c, 401, "INVALID_TOKEN", "Invalid demo token")
+				return
+			}
+			c.Set(string(ContextKeyUser), AuthSubject{
+				UserID:      user.ID,
+				Concurrency: user.Concurrency,
+			})
+			c.Set(string(ContextKeyUserRole), user.Role)
+			c.Set(ContextKeyAuthEmail, user.Email)
+			SetDemoUserInContext(c, user)
+			c.Next()
+			return
+		}
+
 		// 从数据库获取最新的用户信息
 		user, err := userService.GetByID(c.Request.Context(), claims.UserID)
 		if err != nil {

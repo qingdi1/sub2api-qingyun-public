@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -43,6 +44,7 @@ var (
 	ErrInvitationCodeRequired  = infraerrors.BadRequest("INVITATION_CODE_REQUIRED", "invitation code is required")
 	ErrInvitationCodeInvalid   = infraerrors.BadRequest("INVITATION_CODE_INVALID", "invalid or used invitation code")
 	ErrOAuthInvitationRequired = infraerrors.Forbidden("OAUTH_INVITATION_REQUIRED", "invitation code required to complete oauth registration")
+	ErrDemoAccountRestricted   = infraerrors.Forbidden("DEMO_ACCOUNT_RESTRICTED", "operation is unavailable for the demo account")
 )
 
 // maxTokenLength 限制 token 大小，避免超长 header 触发解析时的异常内存分配。
@@ -50,6 +52,12 @@ const maxTokenLength = 8192
 
 // refreshTokenPrefix is the prefix for refresh tokens to distinguish them from access tokens.
 const refreshTokenPrefix = "rt_"
+
+// DemoUserID is deliberately outside the persisted user ID space. It is used
+// only by the process-local demo identity and must never be written to storage.
+const DemoUserID int64 = -1
+
+var demoUserCreatedAt = time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 // JWTClaims JWT载荷数据
 type JWTClaims struct {
@@ -61,6 +69,9 @@ type JWTClaims struct {
 	SessionID string `json:"sid,omitempty"`
 	// BindingHash 会话指纹哈希（IP+UA），会话绑定开启时校验；空值表示旧 token（平滑升级）。
 	BindingHash string `json:"bnd,omitempty"`
+	// Demo marks a signed, process-local demonstration identity. Middleware
+	// recognizes it before any user repository access.
+	Demo bool `json:"demo,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -130,6 +141,63 @@ func (s *AuthService) EntClient() *dbent.Client {
 		return nil
 	}
 	return s.entClient
+}
+
+// DemoUser returns a virtual, non-persistent user when the deployment has
+// explicitly enabled the demo account. The returned value is intentionally
+// rebuilt in memory for each call and is never sent to a repository.
+func (s *AuthService) DemoUser() *User {
+	if s == nil || s.cfg == nil || !s.cfg.DemoAccount.Enabled {
+		return nil
+	}
+	email := strings.TrimSpace(s.cfg.DemoAccount.Email)
+	if email == "" || strings.TrimSpace(s.cfg.DemoAccount.Password) == "" {
+		return nil
+	}
+	displayName := strings.TrimSpace(s.cfg.DemoAccount.DisplayName)
+	if displayName == "" {
+		displayName = "Demo User"
+	}
+	return &User{
+		ID:          DemoUserID,
+		IsDemo:      true,
+		Email:       email,
+		Username:    displayName,
+		Role:        RoleUser,
+		Balance:     128.88,
+		Concurrency: 3,
+		Status:      StatusActive,
+		CreatedAt:   demoUserCreatedAt,
+		UpdatedAt:   demoUserCreatedAt,
+	}
+}
+
+// MatchesDemoCredentials reports whether credentials belong to the configured
+// virtual account. It performs no storage access and is safe for the handler
+// to call before CAPTCHA or normal-login middleware.
+func (s *AuthService) MatchesDemoCredentials(email, password string) bool {
+	demoUser := s.DemoUser()
+	if demoUser == nil || s == nil || s.cfg == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(email), demoUser.Email) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(password), []byte(s.cfg.DemoAccount.Password)) == 1
+}
+
+// DemoUserFromClaims validates that claims still correspond to the configured
+// virtual identity. This lets changing or disabling the demo configuration
+// invalidate existing demo tokens without consulting PostgreSQL or Redis.
+func (s *AuthService) DemoUserFromClaims(claims *JWTClaims) (*User, bool) {
+	if claims == nil || !claims.Demo || claims.UserID != DemoUserID {
+		return nil, false
+	}
+	demoUser := s.DemoUser()
+	if demoUser == nil || !strings.EqualFold(claims.Email, demoUser.Email) || claims.Role != RoleUser {
+		return nil, false
+	}
+	return demoUser, true
 }
 
 // Register 用户注册，返回token和用户
@@ -442,6 +510,17 @@ func (s *AuthService) IsEmailVerifyEnabled(ctx context.Context) bool {
 
 // Login 用户登录，返回JWT token
 func (s *AuthService) Login(ctx context.Context, email, password string) (string, *User, error) {
+	// The demo identity is configuration-backed and deliberately bypasses every
+	// repository/cache path. It is not a row in users and has no refresh tokens.
+	if s.MatchesDemoCredentials(email, password) {
+		user := s.DemoUser()
+		token, err := s.GenerateToken(ctx, user)
+		if err != nil {
+			return "", nil, fmt.Errorf("generate demo token: %w", err)
+		}
+		return token, user, nil
+	}
+
 	// 查找用户
 	user, err := s.userRepo.GetByEmail(ctx, email)
 	if err != nil {
@@ -1217,6 +1296,7 @@ func (s *AuthService) generateAccessToken(user *User, sessionID, bindingHash str
 		TokenVersion: resolvedTokenVersion(user),
 		SessionID:    sessionID,
 		BindingHash:  bindingHash,
+		Demo:         user.IsDemo,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -1263,6 +1343,9 @@ func (s *AuthService) RefreshToken(ctx context.Context, oldTokenString string) (
 	claims, err := s.ValidateToken(oldTokenString)
 	if err != nil && !errors.Is(err, ErrTokenExpired) {
 		return "", err
+	}
+	if claims != nil && claims.Demo {
+		return "", ErrDemoAccountRestricted
 	}
 
 	// 获取最新的用户信息
@@ -1468,6 +1551,10 @@ type TokenPairWithUser struct {
 // GenerateTokenPair 生成Access Token和Refresh Token对
 // familyID: 可选的Token家族ID，用于Token轮转时保持家族关系
 func (s *AuthService) GenerateTokenPair(ctx context.Context, user *User, familyID string) (*TokenPair, error) {
+	if user != nil && user.IsDemo {
+		// Demo sessions are access-token only. Never create refresh-token state.
+		return nil, ErrDemoAccountRestricted
+	}
 	// 检查 refreshTokenCache 是否可用
 	if s.refreshTokenCache == nil {
 		return nil, errors.New("refresh token cache not configured")
@@ -1667,6 +1754,9 @@ func (s *AuthService) RevokeSessionFamily(ctx context.Context, familyID string) 
 // RevokeAllUserSessions 撤销用户的所有会话（所有Refresh Token）
 // 用于密码更改或用户主动登出所有设备
 func (s *AuthService) RevokeAllUserSessions(ctx context.Context, userID int64) error {
+	if userID == DemoUserID {
+		return ErrDemoAccountRestricted
+	}
 	if s.refreshTokenCache == nil {
 		return nil // No-op if cache not configured
 	}
@@ -1677,6 +1767,9 @@ func (s *AuthService) RevokeAllUserSessions(ctx context.Context, userID int64) e
 // Access/refresh token verification both depend on TokenVersion, so bumping it provides
 // immediate revocation even if refresh-token cache cleanup later fails.
 func (s *AuthService) RevokeAllUserTokens(ctx context.Context, userID int64) error {
+	if userID == DemoUserID {
+		return ErrDemoAccountRestricted
+	}
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("get user: %w", err)

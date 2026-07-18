@@ -78,6 +78,7 @@ type Config struct {
 	GitHubOAuth             EmailOAuthProviderConfig      `mapstructure:"github_oauth"`
 	GoogleOAuth             EmailOAuthProviderConfig      `mapstructure:"google_oauth"`
 	Default                 DefaultConfig                 `mapstructure:"default"`
+	DemoAccount             DemoAccountConfig             `mapstructure:"demo_account"`
 	RateLimit               RateLimitConfig               `mapstructure:"rate_limit"`
 	Pricing                 PricingConfig                 `mapstructure:"pricing"`
 	Gateway                 GatewayConfig                 `mapstructure:"gateway"`
@@ -1412,6 +1413,16 @@ type DefaultConfig struct {
 	RateMultiplier  float64 `mapstructure:"rate_multiplier"`
 }
 
+// DemoAccountConfig defines an in-memory, non-persistent account for safely
+// demonstrating the user experience. It is disabled by default so ordinary
+// deployments do not expose a known demo entry point.
+type DemoAccountConfig struct {
+	Enabled     bool   `mapstructure:"enabled"`
+	Email       string `mapstructure:"email"`
+	Password    string `mapstructure:"password"`
+	DisplayName string `mapstructure:"display_name"`
+}
+
 type RateLimitConfig struct {
 	OverloadCooldownMinutes int `mapstructure:"overload_cooldown_minutes"`  // 529过载冷却时间(分钟)
 	OAuth401CooldownMinutes int `mapstructure:"oauth_401_cooldown_minutes"` // OAuth 401临时不可调度冷却(分钟)
@@ -1573,6 +1584,8 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	}
 	cfg.Server.FrontendURL = strings.TrimSpace(cfg.Server.FrontendURL)
 	cfg.JWT.Secret = strings.TrimSpace(cfg.JWT.Secret)
+	cfg.DemoAccount.Email = strings.TrimSpace(cfg.DemoAccount.Email)
+	cfg.DemoAccount.DisplayName = strings.TrimSpace(cfg.DemoAccount.DisplayName)
 	cfg.LinuxDo.ClientID = strings.TrimSpace(cfg.LinuxDo.ClientID)
 	cfg.LinuxDo.ClientSecret = strings.TrimSpace(cfg.LinuxDo.ClientSecret)
 	cfg.LinuxDo.AuthorizeURL = strings.TrimSpace(cfg.LinuxDo.AuthorizeURL)
@@ -1961,6 +1974,13 @@ func setDefaults() {
 	viper.SetDefault("default.api_key_prefix", "sk-")
 	viper.SetDefault("default.rate_multiplier", 1.0)
 
+	// Demo account. Keep disabled unless a downstream deployment explicitly
+	// enables it and supplies credentials through config or environment.
+	viper.SetDefault("demo_account.enabled", false)
+	viper.SetDefault("demo_account.email", "")
+	viper.SetDefault("demo_account.password", "")
+	viper.SetDefault("demo_account.display_name", "")
+
 	// RateLimit
 	viper.SetDefault("rate_limit.overload_cooldown_minutes", 10)
 	viper.SetDefault("rate_limit.oauth_401_cooldown_minutes", 10)
@@ -2211,6 +2231,14 @@ func (c *Config) Validate() error {
 	jwtSecret := strings.TrimSpace(c.JWT.Secret)
 	if jwtSecret == "" {
 		return fmt.Errorf("jwt.secret is required")
+	}
+	if c.DemoAccount.Enabled {
+		if strings.TrimSpace(c.DemoAccount.Email) == "" {
+			return fmt.Errorf("demo_account.email is required when demo_account.enabled=true")
+		}
+		if strings.TrimSpace(c.DemoAccount.Password) == "" {
+			return fmt.Errorf("demo_account.password is required when demo_account.enabled=true")
+		}
 	}
 	// NOTE: 按 UTF-8 编码后的字节长度计算。
 	// 选择 bytes 而不是 rune 计数，确保二进制/随机串的长度语义更接近“熵”而非“字符数”。
