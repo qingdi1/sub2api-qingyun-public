@@ -6,7 +6,9 @@ not to the main Sub2API application. The supported deployment baseline is
 
 ## Published Images
 
-Pin the application and agent to the same Qingyun release version. For example:
+For the initial deployment, pin the application and agent to exact published
+Qingyun releases. Starting both from the same release version is the simplest
+baseline. For example:
 
 ```text
 SUB2API_IMAGE=ghcr.io/qingdi1/sub2api-qingyun-public:0.1.158-qingyun.3
@@ -15,6 +17,21 @@ UPDATE_AGENT_IMAGE=ghcr.io/qingdi1/sub2api-qingyun-update-agent:0.1.158-qingyun.
 
 Do not use `latest` for either image. The agent has Docker socket access and
 must remain a known, reviewed companion to the application release.
+
+### Update Lifecycle
+
+An in-app update replaces only the labelled `sub2api` container. The update
+agent deliberately remains on its current exact tag so it can supervise the
+replacement and retain a stable rollback control plane. It is therefore normal
+for a running application and its update agent to have different tags after an
+application update.
+
+After a successful in-app update, update `SUB2API_IMAGE` in the operator's
+`.env.qingyun` to the deployed application version before any future Compose
+reconciliation. Otherwise a broad `docker compose up` could recreate the
+application with the older bootstrap image. Update the agent separately during
+a planned maintenance window by changing `UPDATE_AGENT_IMAGE` to a reviewed,
+exact release tag and recreating only the `qingyun-update-agent` service.
 
 ## Contract
 

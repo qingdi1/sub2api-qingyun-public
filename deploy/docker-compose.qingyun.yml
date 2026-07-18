@@ -1,5 +1,7 @@
 # Qingyun downstream Docker deployment.
-# Pin SUB2API_IMAGE and UPDATE_AGENT_IMAGE to the same public Qingyun release.
+# Bootstrap both images from exact public Qingyun releases. During an in-app
+# application update, the sidecar intentionally stays running as the rollback
+# control plane; see QINGYUN_UPDATE_AGENT.md before reconciling this file.
 services:
   sub2api:
     image: ${SUB2API_IMAGE:?SUB2API_IMAGE must be an exact published Qingyun image}
