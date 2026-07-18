@@ -293,8 +293,8 @@ func (c *githubReleaseClient) FetchQingyunReleaseChannel(ctx context.Context, re
 	if document.SchemaVersion != 1 {
 		return nil, fmt.Errorf("unsupported Qingyun release channel schema %d", document.SchemaVersion)
 	}
-	if len(document.Releases) == 0 || len(document.Releases) > maxQingyunReleaseChannelEntries {
-		return nil, fmt.Errorf("Qingyun release channel must contain 1 to %d releases", maxQingyunReleaseChannelEntries)
+	if len(document.Releases) > maxQingyunReleaseChannelEntries {
+		return nil, fmt.Errorf("Qingyun release channel cannot contain more than %d releases", maxQingyunReleaseChannelEntries)
 	}
 
 	releases := make([]*service.GitHubRelease, 0, len(document.Releases))

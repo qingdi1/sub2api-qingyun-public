@@ -393,6 +393,22 @@ func (s *GitHubReleaseServiceSuite) TestFetchQingyunReleaseChannel_Success() {
 	require.Equal(s.T(), "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", releases[0].ImageDigest)
 }
 
+func (s *GitHubReleaseServiceSuite) TestFetchQingyunReleaseChannel_Empty() {
+	s.srv = newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"schema_version":1,"releases":[]}`))
+	}))
+
+	s.client = &githubReleaseClient{
+		httpClient:         &http.Client{Transport: &testTransport{testServerURL: s.srv.URL}},
+		downloadHTTPClient: &http.Client{},
+	}
+
+	releases, err := s.client.FetchQingyunReleaseChannel(context.Background(), "test/repo")
+	require.NoError(s.T(), err)
+	require.Empty(s.T(), releases)
+}
+
 func (s *GitHubReleaseServiceSuite) TestFetchQingyunReleaseChannel_RejectsInvalidEntries() {
 	s.srv = newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

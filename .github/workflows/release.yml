@@ -383,7 +383,7 @@ jobs:
 
           if ! jq -e '
             .schema_version == 1 and
-            (.releases | type == "array" and length > 0 and length <= 50) and
+            (.releases | type == "array" and length <= 50) and
             (all(.releases[]; (.version | type == "string") and (.published_at | type == "string") and (.image_digest | type == "string"))) and
             (([.releases[].version] | length) == ([.releases[].version] | unique | length))
           ' "$CHANNEL_FILE" >/dev/null; then

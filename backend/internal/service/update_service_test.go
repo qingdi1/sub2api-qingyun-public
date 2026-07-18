@@ -439,6 +439,34 @@ func TestUpdateServiceDockerAgentUsesQingyunReleaseChannel(t *testing.T) {
 	require.GreaterOrEqual(t, client.channelCalls, 3)
 }
 
+func TestUpdateServiceDockerAgentEmptyQingyunReleaseChannelHasNoUpdate(t *testing.T) {
+	client := &qingyunReleaseChannelClientStub{
+		updateServiceGitHubClientStub: &updateServiceGitHubClientStub{},
+		channelReleases:               []*GitHubRelease{},
+	}
+	svc := NewUpdateServiceWithDeployment(
+		&updateServiceCacheStub{},
+		client,
+		"0.1.158-qingyun.6",
+		"release",
+		UpdateDeploymentConfig{Mode: UpdateDeploymentModeDockerAgent},
+		&dockerUpdateAgentStub{},
+	)
+
+	info, err := svc.CheckUpdate(context.Background(), true)
+
+	require.NoError(t, err)
+	require.Equal(t, "0.1.158-qingyun.6", info.CurrentVersion)
+	require.Equal(t, "0.1.158-qingyun.6", info.LatestVersion)
+	require.False(t, info.HasUpdate)
+	require.Nil(t, info.ReleaseInfo)
+	require.Equal(t, UpdateDeploymentModeDockerAgent, info.DeliveryMode)
+
+	versions, err := svc.ListRollbackVersions(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, versions)
+}
+
 func TestUpdateServiceDockerAgentMapsQingyunReleaseChannelFailure(t *testing.T) {
 	client := &qingyunReleaseChannelClientStub{
 		updateServiceGitHubClientStub: &updateServiceGitHubClientStub{},

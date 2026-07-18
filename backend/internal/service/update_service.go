@@ -897,7 +897,14 @@ func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, er
 	if usingQingyunChannel {
 		release = newestRelease(releases)
 		if release == nil {
-			return nil, ErrQingyunReleaseChannelUnavailable.WithCause(errors.New("Qingyun release channel is empty"))
+			return &UpdateInfo{
+				CurrentVersion: s.currentVersion,
+				LatestVersion:  s.currentVersion,
+				HasUpdate:      false,
+				Cached:         false,
+				BuildType:      s.buildType,
+				DeliveryMode:   s.deliveryMode(),
+			}, nil
 		}
 	} else {
 		release, err = s.githubClient.FetchLatestRelease(ctx, githubRepo)
@@ -949,9 +956,6 @@ func (s *UpdateService) fetchQingyunReleaseChannel(ctx context.Context) ([]*GitH
 	releases, err := client.FetchQingyunReleaseChannel(ctx, githubRepo)
 	if err != nil {
 		return nil, true, ErrQingyunReleaseChannelUnavailable.WithCause(err)
-	}
-	if len(releases) == 0 {
-		return nil, true, ErrQingyunReleaseChannelUnavailable.WithCause(errors.New("Qingyun release channel is empty"))
 	}
 	return releases, true, nil
 }
