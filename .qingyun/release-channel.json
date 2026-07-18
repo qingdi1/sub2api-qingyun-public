@@ -2,6 +2,11 @@
   "schema_version": 1,
   "releases": [
     {
+      "version": "0.1.158-qingyun.6",
+      "published_at": "2026-07-18T15:15:08Z",
+      "image_digest": "sha256:b11468b0e984b1027beb9c64def84d4db653cf45ea5f1f29a55b6df6a0cb0019"
+    },
+    {
       "version": "0.1.158-qingyun.5",
       "published_at": "2026-07-18T13:37:15Z",
       "image_digest": "sha256:29c938fc60c79235a9249d2932a9e02f378ead519defb78925590308c2d7c458"
