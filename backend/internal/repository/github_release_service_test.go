@@ -364,6 +364,56 @@ func (s *GitHubReleaseServiceSuite) TestFetchRecentReleases_Success() {
 	require.Equal(s.T(), "v1.0.0", releases[2].TagName)
 }
 
+func (s *GitHubReleaseServiceSuite) TestFetchQingyunReleaseChannel_Success() {
+	s.srv = newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(s.T(), "/test/repo/qingyun-chat/.qingyun/release-channel.json", r.URL.Path)
+		require.Equal(s.T(), "application/json", r.Header.Get("Accept"))
+		require.Equal(s.T(), "Sub2API-Updater", r.Header.Get("User-Agent"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "schema_version": 1,
+  "releases": [
+    {"version": "0.1.158-qingyun.5", "published_at": "2026-07-18T13:37:15Z", "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"version": "0.1.158-qingyun.4", "published_at": "2026-07-18T12:09:18Z", "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+  ]
+}`))
+	}))
+
+	s.client = &githubReleaseClient{
+		httpClient:         &http.Client{Transport: &testTransport{testServerURL: s.srv.URL}},
+		downloadHTTPClient: &http.Client{},
+	}
+
+	releases, err := s.client.FetchQingyunReleaseChannel(context.Background(), "test/repo")
+	require.NoError(s.T(), err)
+	require.Len(s.T(), releases, 2)
+	require.Equal(s.T(), "v0.1.158-qingyun.5", releases[0].TagName)
+	require.Equal(s.T(), "2026-07-18T13:37:15Z", releases[0].PublishedAt)
+	require.Equal(s.T(), "https://github.com/test/repo/releases/tag/v0.1.158-qingyun.5", releases[0].HTMLURL)
+	require.Equal(s.T(), "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", releases[0].ImageDigest)
+}
+
+func (s *GitHubReleaseServiceSuite) TestFetchQingyunReleaseChannel_RejectsInvalidEntries() {
+	s.srv = newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "schema_version": 1,
+  "releases": [
+    {"version": "0.1.158", "published_at": "not-a-date"}
+  ]
+}`))
+	}))
+
+	s.client = &githubReleaseClient{
+		httpClient:         &http.Client{Transport: &testTransport{testServerURL: s.srv.URL}},
+		downloadHTTPClient: &http.Client{},
+	}
+
+	_, err := s.client.FetchQingyunReleaseChannel(context.Background(), "test/repo")
+	require.Error(s.T(), err)
+	require.Contains(s.T(), err.Error(), "invalid Qingyun release channel version")
+}
+
 func (s *GitHubReleaseServiceSuite) TestFetchRecentReleases_Non200() {
 	s.srv = newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)

@@ -39,6 +39,8 @@ const (
 
 var versionPattern = regexp.MustCompile(`^v?([0-9]+(?:\.[0-9]+){2}(?:-[0-9A-Za-z][0-9A-Za-z._-]*)?)$`)
 
+var imageDigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+
 var errImagePullTimeout = errors.New("image pull timed out")
 
 const (
@@ -71,6 +73,7 @@ type DockerClient interface {
 
 type updateRequest struct {
 	TargetVersion string `json:"target_version"`
+	ImageDigest   string `json:"image_digest"`
 }
 
 type updateResponse struct {
@@ -128,11 +131,19 @@ func normalizeVersion(value string) (string, error) {
 	return match[1], nil
 }
 
-func imageReference(version string) string {
-	return qingyunImageRepository + ":" + version
+func normalizeImageDigest(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if !imageDigestPattern.MatchString(value) {
+		return "", fmt.Errorf("image_digest must be a SHA-256 OCI digest")
+	}
+	return value, nil
 }
 
-func (u *updater) queue(version, operation string) bool {
+func imageReference(imageDigest string) string {
+	return qingyunImageRepository + "@" + imageDigest
+}
+
+func (u *updater) queue(version, imageDigest, operation string) bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.inProgress {
@@ -147,7 +158,7 @@ func (u *updater) queue(version, operation string) bool {
 		UpdatedAt:     time.Now().UTC(),
 	}
 	go func() {
-		err := u.apply(context.Background(), version)
+		err := u.apply(context.Background(), version, imageDigest)
 		if u.onComplete != nil {
 			u.onComplete(err)
 		}
@@ -166,7 +177,7 @@ func (u *updater) queue(version, operation string) bool {
 	return true
 }
 
-func (u *updater) apply(ctx context.Context, version string) (err error) {
+func (u *updater) apply(ctx context.Context, version, imageDigest string) (err error) {
 	targetCtx, cancelTarget := context.WithTimeout(ctx, u.effectiveApplyTimeout())
 	target, err := u.findTarget(targetCtx)
 	cancelTarget()
@@ -174,7 +185,7 @@ func (u *updater) apply(ctx context.Context, version string) (err error) {
 		return err
 	}
 
-	ref := imageReference(version)
+	ref := imageReference(imageDigest)
 	u.setStage(operationStatePulling, "Downloading the requested image.")
 	pullCtx, cancelPull := context.WithTimeout(ctx, u.effectivePullTimeout())
 	pullStream, err := u.docker.ImagePull(pullCtx, ref, image.PullOptions{})
@@ -197,7 +208,7 @@ func (u *updater) apply(ctx context.Context, version string) (err error) {
 	applyCtx, cancelApply := context.WithTimeout(ctx, u.effectiveApplyTimeout())
 	defer cancelApply()
 	u.setStage(operationStateVerifying, "Verifying the published image.")
-	if err := u.verifyTargetImage(applyCtx, ref, version); err != nil {
+	if err := u.verifyTargetImage(applyCtx, ref, version, imageDigest); err != nil {
 		return err
 	}
 
@@ -323,7 +334,7 @@ func failedOperationStatus(current operationStatus, err error) operationStatus {
 	return current
 }
 
-func (u *updater) verifyTargetImage(ctx context.Context, ref, version string) error {
+func (u *updater) verifyTargetImage(ctx context.Context, ref, version, imageDigest string) error {
 	inspect, err := u.docker.ImageInspect(ctx, ref)
 	if err != nil {
 		return fmt.Errorf("inspect pulled Qingyun image %q: %w", ref, err)
@@ -333,6 +344,9 @@ func (u *updater) verifyTargetImage(ctx context.Context, ref, version string) er
 	}
 	if err := verifyImageLabels(inspect.Config.Labels, version); err != nil {
 		return fmt.Errorf("pulled Qingyun image %q: %w", ref, err)
+	}
+	if !slices.Contains(inspect.RepoDigests, imageReference(imageDigest)) {
+		return fmt.Errorf("pulled Qingyun image %q does not retain the expected digest", ref)
 	}
 	return nil
 }

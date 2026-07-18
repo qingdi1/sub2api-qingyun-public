@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "releases": [
+    {
+      "version": "0.1.158-qingyun.5",
+      "published_at": "2026-07-18T13:37:15Z",
+      "image_digest": "sha256:29c938fc60c79235a9249d2932a9e02f378ead519defb78925590308c2d7c458"
+    },
+    {
+      "version": "0.1.158-qingyun.4",
+      "published_at": "2026-07-18T12:09:18Z",
+      "image_digest": "sha256:4ee8bc22ccdaa22fdcbe6839751f13eeba796d66b13f9cd331f721bcab031f93"
+    },
+    {
+      "version": "0.1.158-qingyun.3",
+      "published_at": "2026-07-18T11:41:07Z",
+      "image_digest": "sha256:e4408aa7b23357f1b77912a1a90ea89643b1224744f594a4bc570e328c936b51"
+    },
+    {
+      "version": "0.1.158-qingyun.2",
+      "published_at": "2026-07-18T06:05:52Z",
+      "image_digest": "sha256:6ce779897abef7c672de41532b6b16179dcbc226ab8e3166168d55ddbcc3b7b1"
+    },
+    {
+      "version": "0.1.158-qingyun.1",
+      "published_at": "2026-07-17T14:11:49Z",
+      "image_digest": "sha256:e014b4acffd64db73f92723c74e2ad737485af25abdb1d0c93e318dc80418c3e"
+    }
+  ]
+}

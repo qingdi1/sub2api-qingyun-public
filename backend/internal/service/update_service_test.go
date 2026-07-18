@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testQingyunImageDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 type updateServiceCacheStub struct {
 	data string
 }
@@ -37,6 +39,18 @@ type updateServiceGitHubClientStub struct {
 	recentErr      error
 }
 
+type qingyunReleaseChannelClientStub struct {
+	*updateServiceGitHubClientStub
+	channelReleases []*GitHubRelease
+	channelErr      error
+	channelCalls    int
+}
+
+func (s *qingyunReleaseChannelClientStub) FetchQingyunReleaseChannel(context.Context, string) ([]*GitHubRelease, error) {
+	s.channelCalls++
+	return s.channelReleases, s.channelErr
+}
+
 func (s *updateServiceGitHubClientStub) FetchLatestRelease(context.Context, string) (*GitHubRelease, error) {
 	return s.release, nil
 }
@@ -55,7 +69,9 @@ func (s *updateServiceGitHubClientStub) FetchChecksumFile(context.Context, strin
 
 type dockerUpdateAgentStub struct {
 	targetVersion         string
+	imageDigest           string
 	rollbackTargetVersion string
+	rollbackImageDigest   string
 	result                *DockerUpdateAgentResult
 	rollbackResult        *DockerUpdateAgentResult
 	err                   error
@@ -72,13 +88,15 @@ func (s *dockerUpdateAgentStatusStub) GetStatus(context.Context) (*DockerUpdateA
 	return s.status, s.statusErr
 }
 
-func (s *dockerUpdateAgentStub) QueueUpdate(_ context.Context, targetVersion string) (*DockerUpdateAgentResult, error) {
+func (s *dockerUpdateAgentStub) QueueUpdate(_ context.Context, targetVersion, imageDigest string) (*DockerUpdateAgentResult, error) {
 	s.targetVersion = targetVersion
+	s.imageDigest = imageDigest
 	return s.result, s.err
 }
 
-func (s *dockerUpdateAgentStub) QueueRollback(_ context.Context, targetVersion string) (*DockerUpdateAgentResult, error) {
+func (s *dockerUpdateAgentStub) QueueRollback(_ context.Context, targetVersion, imageDigest string) (*DockerUpdateAgentResult, error) {
 	s.rollbackTargetVersion = targetVersion
+	s.rollbackImageDigest = imageDigest
 	if s.rollbackResult != nil || s.rollbackErr != nil {
 		return s.rollbackResult, s.rollbackErr
 	}
@@ -111,7 +129,12 @@ func TestUpdateServicePerformUpdateQueuesDockerAgentWithServerSelectedVersion(t 
 	}
 	svc := NewUpdateServiceWithDeployment(
 		&updateServiceCacheStub{},
-		&updateServiceGitHubClientStub{release: &GitHubRelease{TagName: "v0.1.159-qingyun.7"}},
+		&qingyunReleaseChannelClientStub{
+			updateServiceGitHubClientStub: &updateServiceGitHubClientStub{},
+			channelReleases: []*GitHubRelease{
+				{TagName: "v0.1.159-qingyun.7", ImageDigest: testQingyunImageDigest},
+			},
+		},
 		"0.1.158-qingyun.2",
 		"release",
 		UpdateDeploymentConfig{Mode: UpdateDeploymentModeDockerAgent},
@@ -123,6 +146,7 @@ func TestUpdateServicePerformUpdateQueuesDockerAgentWithServerSelectedVersion(t 
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, "0.1.159-qingyun.7", agent.targetVersion)
+	require.Equal(t, testQingyunImageDigest, agent.imageDigest)
 	require.True(t, result.Queued)
 	require.False(t, result.NeedRestart)
 	require.Equal(t, "0.1.159-qingyun.7", result.TargetVersion)
@@ -154,7 +178,12 @@ func TestUpdateServiceDockerManualReturnsStructuredConflict(t *testing.T) {
 func TestUpdateServiceDockerAgentWithoutClientReturnsStructuredConflict(t *testing.T) {
 	svc := NewUpdateServiceWithDeployment(
 		&updateServiceCacheStub{},
-		&updateServiceGitHubClientStub{release: &GitHubRelease{TagName: "v0.1.159-qingyun.7"}},
+		&qingyunReleaseChannelClientStub{
+			updateServiceGitHubClientStub: &updateServiceGitHubClientStub{},
+			channelReleases: []*GitHubRelease{
+				{TagName: "v0.1.159-qingyun.7", ImageDigest: testQingyunImageDigest},
+			},
+		},
 		"0.1.158-qingyun.2",
 		"release",
 		UpdateDeploymentConfig{Mode: UpdateDeploymentModeDockerAgent},
@@ -201,6 +230,7 @@ func TestDockerUpdateAgentClientOnlyPostsServerSelectedVersion(t *testing.T) {
 		var request dockerUpdateAgentRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 		require.Equal(t, targetVersion, request.TargetVersion)
+		require.Equal(t, testQingyunImageDigest, request.ImageDigest)
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"queued":true,"target_version":"0.1.159-qingyun.7","message":"accepted"}`))
@@ -208,7 +238,7 @@ func TestDockerUpdateAgentClientOnlyPostsServerSelectedVersion(t *testing.T) {
 	defer server.Close()
 
 	client := newDockerUpdateAgentClient(server.URL+"/v1/update", token)
-	result, err := client.QueueUpdate(context.Background(), targetVersion)
+	result, err := client.QueueUpdate(context.Background(), targetVersion, testQingyunImageDigest)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -228,6 +258,7 @@ func TestDockerUpdateAgentClientRollbackPostsDedicatedEndpoint(t *testing.T) {
 		var request dockerUpdateAgentRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 		require.Equal(t, targetVersion, request.TargetVersion)
+		require.Equal(t, testQingyunImageDigest, request.ImageDigest)
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"queued":true,"target_version":"0.1.158-qingyun.1","message":"rollback accepted"}`))
@@ -237,7 +268,7 @@ func TestDockerUpdateAgentClientRollbackPostsDedicatedEndpoint(t *testing.T) {
 	client := newDockerUpdateAgentClient(server.URL+"/v1/update", token)
 	rollbackClient, ok := client.(DockerRollbackAgent)
 	require.True(t, ok)
-	result, err := rollbackClient.QueueRollback(context.Background(), targetVersion)
+	result, err := rollbackClient.QueueRollback(context.Background(), targetVersion, testQingyunImageDigest)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -315,9 +346,10 @@ func TestUpdateServiceDockerAgentRollbackQueuesAllowlistedVersion(t *testing.T) 
 	}
 	svc := NewUpdateServiceWithDeployment(
 		&updateServiceCacheStub{},
-		&updateServiceGitHubClientStub{
-			recentReleases: []*GitHubRelease{
-				{TagName: "v" + targetVersion, PublishedAt: "2026-07-17T00:00:00Z"},
+		&qingyunReleaseChannelClientStub{
+			updateServiceGitHubClientStub: &updateServiceGitHubClientStub{},
+			channelReleases: []*GitHubRelease{
+				{TagName: "v" + targetVersion, PublishedAt: "2026-07-17T00:00:00Z", ImageDigest: testQingyunImageDigest},
 			},
 		},
 		"0.1.158-qingyun.2",
@@ -331,6 +363,7 @@ func TestUpdateServiceDockerAgentRollbackQueuesAllowlistedVersion(t *testing.T) 
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, targetVersion, agent.rollbackTargetVersion)
+	require.Equal(t, testQingyunImageDigest, agent.rollbackImageDigest)
 	require.True(t, result.Queued)
 	require.False(t, result.NeedRestart)
 	require.Equal(t, targetVersion, result.TargetVersion)
@@ -341,8 +374,9 @@ func TestUpdateServiceDockerAgentRollbackQueuesAllowlistedVersion(t *testing.T) 
 func TestUpdateServiceDockerAgentListsRollbackVersions(t *testing.T) {
 	svc := NewUpdateServiceWithDeployment(
 		&updateServiceCacheStub{},
-		&updateServiceGitHubClientStub{
-			recentReleases: []*GitHubRelease{{TagName: "v0.1.158-qingyun.1"}},
+		&qingyunReleaseChannelClientStub{
+			updateServiceGitHubClientStub: &updateServiceGitHubClientStub{},
+			channelReleases:               []*GitHubRelease{{TagName: "v0.1.158-qingyun.1", ImageDigest: testQingyunImageDigest}},
 		},
 		"0.1.158-qingyun.2",
 		"release",
@@ -354,6 +388,89 @@ func TestUpdateServiceDockerAgentListsRollbackVersions(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, versions, 1)
 	require.Equal(t, "0.1.158-qingyun.1", versions[0].Version)
+}
+
+func TestUpdateServiceDockerAgentUsesQingyunReleaseChannel(t *testing.T) {
+	client := &qingyunReleaseChannelClientStub{
+		updateServiceGitHubClientStub: &updateServiceGitHubClientStub{
+			release: &GitHubRelease{TagName: "v9.9.9"},
+			recentReleases: []*GitHubRelease{
+				{TagName: "v9.9.9"},
+			},
+		},
+		channelReleases: []*GitHubRelease{
+			{TagName: "v0.1.158-qingyun.4", ImageDigest: testQingyunImageDigest},
+			{TagName: "v0.1.158-qingyun.6", ImageDigest: testQingyunImageDigest},
+			{TagName: "v0.1.158-qingyun.5", ImageDigest: testQingyunImageDigest},
+			{TagName: "v0.1.158-qingyun.3", ImageDigest: testQingyunImageDigest},
+		},
+	}
+	agent := &dockerUpdateAgentStub{
+		result:         &DockerUpdateAgentResult{Queued: true, Message: "update queued"},
+		rollbackResult: &DockerUpdateAgentResult{Queued: true, Message: "rollback queued"},
+	}
+	svc := NewUpdateServiceWithDeployment(
+		&updateServiceCacheStub{},
+		client,
+		"0.1.158-qingyun.5",
+		"release",
+		UpdateDeploymentConfig{Mode: UpdateDeploymentModeDockerAgent},
+		agent,
+	)
+
+	update, err := svc.PerformUpdate(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "0.1.158-qingyun.6", update.TargetVersion)
+	require.Equal(t, "0.1.158-qingyun.6", agent.targetVersion)
+	require.Equal(t, testQingyunImageDigest, agent.imageDigest)
+
+	versions, err := svc.ListRollbackVersions(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []RollbackVersion{
+		{Version: "0.1.158-qingyun.4", HTMLURL: ""},
+		{Version: "0.1.158-qingyun.3", HTMLURL: ""},
+	}, versions)
+
+	rollback, err := svc.RollbackToVersionResult(context.Background(), "0.1.158-qingyun.4")
+	require.NoError(t, err)
+	require.Equal(t, "0.1.158-qingyun.4", rollback.TargetVersion)
+	require.Equal(t, "0.1.158-qingyun.4", agent.rollbackTargetVersion)
+	require.Equal(t, testQingyunImageDigest, agent.rollbackImageDigest)
+	require.GreaterOrEqual(t, client.channelCalls, 3)
+}
+
+func TestUpdateServiceDockerAgentMapsQingyunReleaseChannelFailure(t *testing.T) {
+	client := &qingyunReleaseChannelClientStub{
+		updateServiceGitHubClientStub: &updateServiceGitHubClientStub{},
+		channelErr:                    errors.New("channel unavailable"),
+	}
+	svc := NewUpdateServiceWithDeployment(
+		&updateServiceCacheStub{},
+		client,
+		"0.1.158-qingyun.5",
+		"release",
+		UpdateDeploymentConfig{Mode: UpdateDeploymentModeDockerAgent},
+		&dockerUpdateAgentStub{},
+	)
+
+	_, err := svc.ListRollbackVersions(context.Background())
+	require.ErrorIs(t, err, ErrQingyunReleaseChannelUnavailable)
+	appErr := infraerrors.FromError(err)
+	require.Equal(t, "QINGYUN_RELEASE_CHANNEL_UNAVAILABLE", appErr.Reason)
+}
+
+func TestUpdateServiceDockerAgentRequiresQingyunReleaseChannelClient(t *testing.T) {
+	svc := NewUpdateServiceWithDeployment(
+		&updateServiceCacheStub{},
+		&updateServiceGitHubClientStub{},
+		"0.1.158-qingyun.5",
+		"release",
+		UpdateDeploymentConfig{Mode: UpdateDeploymentModeDockerAgent},
+		&dockerUpdateAgentStub{},
+	)
+
+	_, err := svc.ListRollbackVersions(context.Background())
+	require.ErrorIs(t, err, ErrQingyunReleaseChannelUnavailable)
 }
 
 func TestUpdateServiceDockerRollbackNeverUsesBinaryReplacement(t *testing.T) {

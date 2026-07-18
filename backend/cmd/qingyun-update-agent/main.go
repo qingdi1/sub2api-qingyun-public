@@ -172,7 +172,12 @@ func (s *httpServer) queueOperation(w http.ResponseWriter, r *http.Request, oper
 		writeJSON(w, http.StatusBadRequest, updateResponse{Message: err.Error()})
 		return
 	}
-	if !s.updater.queue(version, operation) {
+	imageDigest, err := normalizeImageDigest(request.ImageDigest)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, updateResponse{Message: err.Error()})
+		return
+	}
+	if !s.updater.queue(version, imageDigest, operation) {
 		writeJSON(w, http.StatusConflict, updateResponse{
 			Queued:        false,
 			TargetVersion: requestedVersion,

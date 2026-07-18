@@ -48,6 +48,10 @@ var (
 		"UPDATE_AGENT_STATUS_UNAVAILABLE",
 		"The Docker update agent status could not be reached. Verify the update-agent service and try again.",
 	)
+	ErrQingyunReleaseChannelUnavailable = infraerrors.ServiceUnavailable(
+		"QINGYUN_RELEASE_CHANNEL_UNAVAILABLE",
+		"The Qingyun release channel could not be reached. Verify the public update repository and try again.",
+	)
 )
 
 const (
@@ -92,6 +96,13 @@ type GitHubReleaseClient interface {
 	FetchChecksumFile(ctx context.Context, url string) ([]byte, error)
 }
 
+// QingyunReleaseChannelClient is implemented by the public Qingyun release
+// repository client. Docker-agent deployments use this branch-pinned allowlist
+// for update and rollback selection instead of anonymous GitHub REST calls.
+type QingyunReleaseChannelClient interface {
+	FetchQingyunReleaseChannel(ctx context.Context, repo string) ([]*GitHubRelease, error)
+}
+
 // UpdateDeploymentConfig is the server-side delivery configuration for released updates.
 // It intentionally contains no image name or container identifier: those are owned by the
 // update agent deployment, rather than exposed through the administrator-facing API.
@@ -105,7 +116,7 @@ type UpdateDeploymentConfig struct {
 // The service supplies the release version after verifying it against the configured release
 // channel. Callers cannot provide an image or container target.
 type DockerUpdateAgent interface {
-	QueueUpdate(ctx context.Context, targetVersion string) (*DockerUpdateAgentResult, error)
+	QueueUpdate(ctx context.Context, targetVersion, imageDigest string) (*DockerUpdateAgentResult, error)
 }
 
 // DockerRollbackAgent is implemented by agents that expose the rollback
@@ -113,7 +124,7 @@ type DockerUpdateAgent interface {
 // interface preserves compatibility with existing update-only test doubles and
 // makes it impossible to accidentally use the update endpoint for rollback.
 type DockerRollbackAgent interface {
-	QueueRollback(ctx context.Context, targetVersion string) (*DockerUpdateAgentResult, error)
+	QueueRollback(ctx context.Context, targetVersion, imageDigest string) (*DockerUpdateAgentResult, error)
 }
 
 // DockerUpdateAgentStatusClient is optional so existing update-only agent
@@ -151,6 +162,7 @@ type dockerUpdateAgentClient struct {
 
 type dockerUpdateAgentRequest struct {
 	TargetVersion string `json:"target_version"`
+	ImageDigest   string `json:"image_digest"`
 }
 
 type dockerUpdateAgentResponse struct {
@@ -209,6 +221,7 @@ type UpdateInfo struct {
 	Warning        string       `json:"warning,omitempty"`
 	BuildType      string       `json:"build_type"` // "source" or "release"
 	DeliveryMode   string       `json:"delivery_mode"`
+	ImageDigest    string       `json:"-"`
 }
 
 // UpdateResult is returned after an update has either been applied to a binary
@@ -248,6 +261,7 @@ type GitHubRelease struct {
 	Draft       bool          `json:"draft"`
 	Prerelease  bool          `json:"prerelease"`
 	Assets      []GitHubAsset `json:"assets"`
+	ImageDigest string        `json:"-"`
 }
 
 // RollbackVersion describes a release version the system can roll back to
@@ -326,7 +340,10 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) (*UpdateResult, error
 		if s.dockerAgent == nil {
 			return nil, s.deliveryError(ErrDockerUpdateAgentNotConfigured, mode, targetVersion)
 		}
-		agentResult, err := s.dockerAgent.QueueUpdate(ctx, targetVersion)
+		if strings.TrimSpace(info.ImageDigest) == "" {
+			return nil, s.deliveryError(ErrQingyunReleaseChannelUnavailable, mode, targetVersion)
+		}
+		agentResult, err := s.dockerAgent.QueueUpdate(ctx, targetVersion, info.ImageDigest)
 		if err != nil {
 			return nil, s.dockerAgentError(mode, targetVersion, err)
 		}
@@ -463,12 +480,12 @@ func newDockerUpdateAgentClient(endpoint, token string) DockerUpdateAgent {
 	}
 }
 
-func (a *dockerUpdateAgentClient) QueueUpdate(ctx context.Context, targetVersion string) (*DockerUpdateAgentResult, error) {
-	return a.queueAt(ctx, a.endpoint, targetVersion)
+func (a *dockerUpdateAgentClient) QueueUpdate(ctx context.Context, targetVersion, imageDigest string) (*DockerUpdateAgentResult, error) {
+	return a.queueAt(ctx, a.endpoint, targetVersion, imageDigest)
 }
 
-func (a *dockerUpdateAgentClient) QueueRollback(ctx context.Context, targetVersion string) (*DockerUpdateAgentResult, error) {
-	return a.queueAt(ctx, a.rollbackEndpoint, targetVersion)
+func (a *dockerUpdateAgentClient) QueueRollback(ctx context.Context, targetVersion, imageDigest string) (*DockerUpdateAgentResult, error) {
+	return a.queueAt(ctx, a.rollbackEndpoint, targetVersion, imageDigest)
 }
 
 func (a *dockerUpdateAgentClient) GetStatus(ctx context.Context) (*DockerUpdateAgentStatus, error) {
@@ -509,12 +526,16 @@ func (a *dockerUpdateAgentClient) GetStatus(ctx context.Context) (*DockerUpdateA
 	return &status, nil
 }
 
-func (a *dockerUpdateAgentClient) queueAt(ctx context.Context, endpoint, targetVersion string) (*DockerUpdateAgentResult, error) {
+func (a *dockerUpdateAgentClient) queueAt(ctx context.Context, endpoint, targetVersion, imageDigest string) (*DockerUpdateAgentResult, error) {
 	targetVersion = strings.TrimSpace(targetVersion)
 	if targetVersion == "" {
 		return nil, fmt.Errorf("target version is required")
 	}
-	payload, err := json.Marshal(dockerUpdateAgentRequest{TargetVersion: targetVersion})
+	imageDigest = strings.TrimSpace(imageDigest)
+	if imageDigest == "" {
+		return nil, fmt.Errorf("image digest is required")
+	}
+	payload, err := json.Marshal(dockerUpdateAgentRequest{TargetVersion: targetVersion, ImageDigest: imageDigest})
 	if err != nil {
 		return nil, fmt.Errorf("encode docker update request: %w", err)
 	}
@@ -774,7 +795,10 @@ func (s *UpdateService) RollbackToVersionResult(ctx context.Context, version str
 		if !ok || rollbackAgent == nil {
 			return nil, s.deliveryError(ErrDockerRollbackAgentNotConfigured, mode, target)
 		}
-		agentResult, err := rollbackAgent.QueueRollback(ctx, target)
+		if strings.TrimSpace(match.ImageDigest) == "" {
+			return nil, s.deliveryError(ErrQingyunReleaseChannelUnavailable, mode, target)
+		}
+		agentResult, err := rollbackAgent.QueueRollback(ctx, target, match.ImageDigest)
 		if err != nil {
 			return nil, s.dockerRollbackAgentError(mode, target, err)
 		}
@@ -822,9 +846,15 @@ func (s *UpdateService) RollbackToVersionResult(ctx context.Context, version str
 // fetchRollbackCandidates fetches recent releases and keeps the newest
 // maxRollbackVersions entries strictly older than the current version.
 func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubRelease, error) {
-	releases, err := s.githubClient.FetchRecentReleases(ctx, githubRepo, rollbackFetchPageSize)
+	releases, usingQingyunChannel, err := s.fetchQingyunReleaseChannel(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if !usingQingyunChannel {
+		releases, err = s.githubClient.FetchRecentReleases(ctx, githubRepo, rollbackFetchPageSize)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	seen := make(map[string]bool, len(releases))
@@ -859,9 +889,24 @@ func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubR
 }
 
 func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, error) {
-	release, err := s.githubClient.FetchLatestRelease(ctx, githubRepo)
+	var release *GitHubRelease
+	releases, usingQingyunChannel, err := s.fetchQingyunReleaseChannel(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if usingQingyunChannel {
+		release = newestRelease(releases)
+		if release == nil {
+			return nil, ErrQingyunReleaseChannelUnavailable.WithCause(errors.New("Qingyun release channel is empty"))
+		}
+	} else {
+		release, err = s.githubClient.FetchLatestRelease(ctx, githubRepo)
+		if err != nil {
+			return nil, err
+		}
+		if release == nil {
+			return nil, errors.New("GitHub release client returned no release")
+		}
 	}
 
 	latestVersion := strings.TrimPrefix(release.TagName, "v")
@@ -889,7 +934,42 @@ func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, er
 		Cached:       false,
 		BuildType:    s.buildType,
 		DeliveryMode: s.deliveryMode(),
+		ImageDigest:  release.ImageDigest,
 	}, nil
+}
+
+func (s *UpdateService) fetchQingyunReleaseChannel(ctx context.Context) ([]*GitHubRelease, bool, error) {
+	if s.deliveryMode() != UpdateDeploymentModeDockerAgent {
+		return nil, false, nil
+	}
+	client, ok := s.githubClient.(QingyunReleaseChannelClient)
+	if !ok || client == nil {
+		return nil, true, ErrQingyunReleaseChannelUnavailable.WithCause(errors.New("Qingyun release channel client is not configured"))
+	}
+	releases, err := client.FetchQingyunReleaseChannel(ctx, githubRepo)
+	if err != nil {
+		return nil, true, ErrQingyunReleaseChannelUnavailable.WithCause(err)
+	}
+	if len(releases) == 0 {
+		return nil, true, ErrQingyunReleaseChannelUnavailable.WithCause(errors.New("Qingyun release channel is empty"))
+	}
+	return releases, true, nil
+}
+
+func newestRelease(releases []*GitHubRelease) *GitHubRelease {
+	var newest *GitHubRelease
+	for _, release := range releases {
+		if release == nil || strings.TrimSpace(release.TagName) == "" {
+			continue
+		}
+		if newest == nil || compareVersions(
+			strings.TrimPrefix(release.TagName, "v"),
+			strings.TrimPrefix(newest.TagName, "v"),
+		) > 0 {
+			newest = release
+		}
+	}
+	return newest
 }
 
 func (s *UpdateService) downloadFile(ctx context.Context, downloadURL, dest string) error {

@@ -21,6 +21,8 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
+const testImageDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 func TestNormalizeVersionRejectsImageInjection(t *testing.T) {
 	tests := []struct {
 		input string
@@ -43,6 +45,27 @@ func TestNormalizeVersionRejectsImageInjection(t *testing.T) {
 			}
 			if got != test.want {
 				t.Fatalf("normalizeVersion(%q) = %q, want %q", test.input, got, test.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeImageDigestRejectsMutableImageReferences(t *testing.T) {
+	tests := []struct {
+		input string
+		ok    bool
+	}{
+		{input: testImageDigest, ok: true},
+		{input: "sha256:ABCDEF", ok: false},
+		{input: "0.1.158-qingyun.5", ok: false},
+		{input: "ghcr.io/qingdi1/sub2api-qingyun-public:latest", ok: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			_, err := normalizeImageDigest(test.input)
+			if (err == nil) != test.ok {
+				t.Fatalf("normalizeImageDigest(%q) error = %v, want ok=%v", test.input, err, test.ok)
 			}
 		})
 	}
@@ -103,7 +126,7 @@ func TestClonedConfigurationDropsDynamicNetworkFields(t *testing.T) {
 	endpoint.IPAMConfig = &network.EndpointIPAMConfig{IPv4Address: "172.20.0.9"}
 	endpoint.Aliases = []string{"sub2api", "api"}
 
-	_, _, networks, err := clonedConfiguration(inspect, imageReference("0.1.158-qingyun.2"), "0.1.158-qingyun.2")
+	_, _, networks, err := clonedConfiguration(inspect, imageReference(testImageDigest), "0.1.158-qingyun.2")
 	if err != nil {
 		t.Fatalf("clonedConfiguration: %v", err)
 	}
@@ -132,7 +155,7 @@ func TestApplyRollsBackWhenReplacementIsUnhealthy(t *testing.T) {
 	}
 	fake := &fakeDockerClient{
 		containers: []container.Summary{{ID: "sub2api-id"}},
-		image:      verifiedImage("0.1.158-qingyun.2"),
+		image:      verifiedImage("0.1.158-qingyun.2", testImageDigest),
 		inspects: map[string][]container.InspectResponse{
 			"sub2api-id":     {old},
 			"replacement-id": {newContainer},
@@ -143,11 +166,11 @@ func TestApplyRollsBackWhenReplacementIsUnhealthy(t *testing.T) {
 	agent.healthTimeout = 20 * time.Millisecond
 	agent.healthPollInterval = time.Millisecond
 
-	err := agent.apply(context.Background(), "0.1.158-qingyun.2")
+	err := agent.apply(context.Background(), "0.1.158-qingyun.2", testImageDigest)
 	if err == nil || !strings.Contains(err.Error(), "unhealthy") {
 		t.Fatalf("apply error = %v, want unhealthy replacement failure", err)
 	}
-	if !slices.Equal(fake.pullRefs, []string{qingyunImageRepository + ":0.1.158-qingyun.2"}) {
+	if !slices.Equal(fake.pullRefs, []string{imageReference(testImageDigest)}) {
 		t.Fatalf("unexpected image pull references: %v", fake.pullRefs)
 	}
 	if !slices.Contains(fake.stopCalls, "sub2api-id") || !slices.Contains(fake.stopCalls, "replacement-id") {
@@ -184,7 +207,7 @@ func TestApplyTimesOutSlowImagePullBeforeStoppingTarget(t *testing.T) {
 	agent.pullTimeout = time.Millisecond
 	agent.applyTimeout = time.Second
 
-	err := agent.apply(context.Background(), "0.1.158-qingyun.2")
+	err := agent.apply(context.Background(), "0.1.158-qingyun.2", testImageDigest)
 	if !errors.Is(err, errImagePullTimeout) {
 		t.Fatalf("apply error = %v, want image pull timeout", err)
 	}
@@ -209,7 +232,7 @@ func TestStatusRouteRequiresAuthorizationAndReportsFailures(t *testing.T) {
 		t.Fatalf("unauthorized status = %d, want %d", unauthorized.Code, http.StatusUnauthorized)
 	}
 
-	if !agent.queue("0.1.158-qingyun.2", "update") {
+	if !agent.queue("0.1.158-qingyun.2", testImageDigest, "update") {
 		t.Fatal("queue should accept the first update")
 	}
 	deadline := time.Now().Add(time.Second)
@@ -279,7 +302,7 @@ func TestRollbackRouteQueuesAuthorizedVersion(t *testing.T) {
 	}
 	fake := &fakeDockerClient{
 		containers: []container.Summary{{ID: "sub2api-id"}},
-		image:      verifiedImage(targetVersion),
+		image:      verifiedImage(targetVersion, testImageDigest),
 		inspects: map[string][]container.InspectResponse{
 			"sub2api-id":     {old},
 			"replacement-id": {replacement},
@@ -291,7 +314,7 @@ func TestRollbackRouteQueuesAuthorizedVersion(t *testing.T) {
 	agent.healthPollInterval = time.Millisecond
 	server := (&httpServer{updater: agent, token: "test-token"}).routes()
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/rollback", strings.NewReader(`{"target_version":"v`+targetVersion+`"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/rollback", strings.NewReader(`{"target_version":"v`+targetVersion+`","image_digest":"`+testImageDigest+`"}`))
 	req.Header.Set("Authorization", "Bearer test-token")
 	req.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
@@ -318,7 +341,7 @@ func TestRollbackRouteQueuesAuthorizedVersion(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if !slices.Equal(fake.pullRefs, []string{qingyunImageRepository + ":" + targetVersion}) {
+	if !slices.Equal(fake.pullRefs, []string{imageReference(testImageDigest)}) {
 		t.Fatalf("rollback pull references = %v", fake.pullRefs)
 	}
 }
@@ -357,8 +380,9 @@ func managedInspect(id, name, version string) container.InspectResponse {
 	}
 }
 
-func verifiedImage(version string) image.InspectResponse {
+func verifiedImage(version, imageDigest string) image.InspectResponse {
 	return image.InspectResponse{
+		RepoDigests: []string{imageReference(imageDigest)},
 		Config: &dockerspec.DockerOCIImageConfig{
 			ImageConfig: ocispec.ImageConfig{Labels: map[string]string{
 				ociSourceLabel:  qingyunSourceURL,

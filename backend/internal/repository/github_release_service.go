@@ -27,9 +27,31 @@ type githubReleaseClientError struct {
 
 var releaseFallbackVersionPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
 
+var qingyunReleaseChannelVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+-qingyun\.[0-9]+$`)
+
+var qingyunReleaseChannelDigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+
 var releaseFallbackBranches = []string{"qingyun-chat", "main"}
 
 var releaseFallbackVersionFiles = []string{"VERSION", "backend/cmd/server/VERSION"}
+
+const (
+	qingyunReleaseChannelBranch     = "qingyun-chat"
+	qingyunReleaseChannelPath       = ".qingyun/release-channel.json"
+	maxQingyunReleaseChannelBytes   = 64 * 1024
+	maxQingyunReleaseChannelEntries = 50
+)
+
+type qingyunReleaseChannelDocument struct {
+	SchemaVersion int                            `json:"schema_version"`
+	Releases      []qingyunReleaseChannelRelease `json:"releases"`
+}
+
+type qingyunReleaseChannelRelease struct {
+	Version     string `json:"version"`
+	PublishedAt string `json:"published_at"`
+	ImageDigest string `json:"image_digest"`
+}
 
 // NewGitHubReleaseClient 创建 GitHub Release 客户端
 // proxyURL 为空时直连 GitHub，支持 http/https/socks5/socks5h 协议
@@ -75,6 +97,10 @@ func (c *githubReleaseClientError) FetchLatestRelease(ctx context.Context, repo 
 }
 
 func (c *githubReleaseClientError) FetchRecentReleases(ctx context.Context, repo string, perPage int) ([]*service.GitHubRelease, error) {
+	return nil, c.err
+}
+
+func (c *githubReleaseClientError) FetchQingyunReleaseChannel(ctx context.Context, repo string) ([]*service.GitHubRelease, error) {
 	return nil, c.err
 }
 
@@ -218,6 +244,86 @@ func (c *githubReleaseClient) FetchRecentReleases(ctx context.Context, repo stri
 	var releases []*service.GitHubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
 		return nil, err
+	}
+
+	return releases, nil
+}
+
+// FetchQingyunReleaseChannel reads the public, branch-pinned Qingyun release
+// channel. Docker update and rollback selection uses this explicit allowlist
+// instead of GitHub's rate-limited anonymous REST release API.
+func (c *githubReleaseClient) FetchQingyunReleaseChannel(ctx context.Context, repo string) ([]*service.GitHubRelease, error) {
+	url := fmt.Sprintf(
+		"https://raw.githubusercontent.com/%s/%s/%s",
+		repo,
+		qingyunReleaseChannelBranch,
+		qingyunReleaseChannelPath,
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "Sub2API-Updater")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Qingyun release channel returned %d", resp.StatusCode)
+	}
+	if resp.ContentLength > maxQingyunReleaseChannelBytes {
+		return nil, fmt.Errorf("Qingyun release channel is too large: %d bytes", resp.ContentLength)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxQingyunReleaseChannelBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxQingyunReleaseChannelBytes {
+		return nil, fmt.Errorf("Qingyun release channel exceeds %d bytes", maxQingyunReleaseChannelBytes)
+	}
+
+	var document qingyunReleaseChannelDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		return nil, fmt.Errorf("decode Qingyun release channel: %w", err)
+	}
+	if document.SchemaVersion != 1 {
+		return nil, fmt.Errorf("unsupported Qingyun release channel schema %d", document.SchemaVersion)
+	}
+	if len(document.Releases) == 0 || len(document.Releases) > maxQingyunReleaseChannelEntries {
+		return nil, fmt.Errorf("Qingyun release channel must contain 1 to %d releases", maxQingyunReleaseChannelEntries)
+	}
+
+	releases := make([]*service.GitHubRelease, 0, len(document.Releases))
+	seen := make(map[string]struct{}, len(document.Releases))
+	for _, entry := range document.Releases {
+		version := strings.TrimSpace(entry.Version)
+		if !qingyunReleaseChannelVersionPattern.MatchString(version) {
+			return nil, fmt.Errorf("invalid Qingyun release channel version %q", version)
+		}
+		if _, ok := seen[version]; ok {
+			return nil, fmt.Errorf("duplicate Qingyun release channel version %q", version)
+		}
+		if publishedAt := strings.TrimSpace(entry.PublishedAt); publishedAt != "" {
+			if _, err := time.Parse(time.RFC3339, publishedAt); err != nil {
+				return nil, fmt.Errorf("invalid publication time for Qingyun version %q: %w", version, err)
+			}
+		}
+		imageDigest := strings.TrimSpace(entry.ImageDigest)
+		if !qingyunReleaseChannelDigestPattern.MatchString(imageDigest) {
+			return nil, fmt.Errorf("invalid image digest for Qingyun version %q", version)
+		}
+		seen[version] = struct{}{}
+		releases = append(releases, &service.GitHubRelease{
+			TagName:     "v" + version,
+			Name:        "v" + version,
+			PublishedAt: strings.TrimSpace(entry.PublishedAt),
+			HTMLURL:     fmt.Sprintf("https://github.com/%s/releases/tag/v%s", repo, version),
+			ImageDigest: imageDigest,
+		})
 	}
 
 	return releases, nil
