@@ -71,7 +71,10 @@ describe('account endpoint whitelist', () => {
     )
 
     await expect(fetchAccountDomainWhitelist()).resolves.toEqual(whitelist)
-    expect(fetchMock).toHaveBeenCalledWith('/account-domain-whitelist.json', { cache: 'no-store' })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://raw.githubusercontent.com/qingdi1/sub2api-qingyun-public/qingyun-chat/frontend/public/account-domain-whitelist.json',
+      { cache: 'no-store' }
+    )
   })
 
   it('rejects malformed or duplicate host rules', async () => {

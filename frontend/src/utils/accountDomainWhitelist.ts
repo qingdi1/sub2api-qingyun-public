@@ -4,6 +4,9 @@ export interface AccountDomainWhitelist {
   ips: string[]
 }
 
+const accountDomainWhitelistURL =
+  'https://raw.githubusercontent.com/qingdi1/sub2api-qingyun-public/qingyun-chat/frontend/public/account-domain-whitelist.json'
+
 export interface AccountDomainWhitelistValidationOptions {
   validateCredentialsBaseUrl?: boolean
   validateCustomBaseUrl?: boolean
@@ -105,7 +108,7 @@ const parseWhitelist = (value: unknown): AccountDomainWhitelist => {
 export const fetchAccountDomainWhitelist = async (): Promise<AccountDomainWhitelist> => {
   let response: Response
   try {
-    response = await fetch('/account-domain-whitelist.json', { cache: 'no-store' })
+    response = await fetch(accountDomainWhitelistURL, { cache: 'no-store' })
   } catch {
     throw new AccountDomainWhitelistError('load_failed')
   }

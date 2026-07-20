@@ -255,6 +255,13 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	// OEM设置
 	updates[SettingKeySiteName] = settings.SiteName
 	updates[SettingKeySiteLogo] = settings.SiteLogo
+	if settings.UIStyle == "" {
+		settings.UIStyle = DefaultUIStyle
+	}
+	if !IsValidUIStyle(settings.UIStyle) {
+		return nil, fmt.Errorf("invalid ui style: %q", settings.UIStyle)
+	}
+	updates[SettingKeyUIStyle] = settings.UIStyle
 	updates[SettingKeySiteSubtitle] = settings.SiteSubtitle
 	updates[SettingKeyAPIBaseURL] = settings.APIBaseURL
 	updates[SettingKeyContactInfo] = settings.ContactInfo

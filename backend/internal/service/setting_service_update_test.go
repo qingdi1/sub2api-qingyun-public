@@ -329,6 +329,18 @@ func TestSettingService_UpdateSettings_TablePreferences(t *testing.T) {
 	require.Equal(t, "[20,100]", repo.updates[SettingKeyTablePageSizeOptions])
 }
 
+func TestSettingService_UpdateSettings_PersistsAndValidatesUIStyle(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{UIStyle: "forest"})
+	require.NoError(t, err)
+	require.Equal(t, "forest", repo.updates[SettingKeyUIStyle])
+
+	err = svc.UpdateSettings(context.Background(), &SystemSettings{UIStyle: "invalid"})
+	require.Error(t, err)
+}
+
 func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler(t *testing.T) {
 	resetOpenAIAdvancedSchedulerSettingCacheForTest()
 	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()

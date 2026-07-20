@@ -444,6 +444,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	if err := s.validateQingyunAccountEndpoints(ctx, input.Type, input.Credentials, input.Extra); err != nil {
+		return nil, err
+	}
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
 		return nil, err
@@ -708,6 +711,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			}
 		}
 	}
+	if err := s.validateQingyunAccountEndpoints(ctx, account.Type, account.Credentials, account.Extra); err != nil {
+		return nil, err
+	}
 
 	probeEnabledAppliedAtomically := false
 	if requestedProbeEnabledUpdate != nil && isUpstreamBillingProbeAccount(account) {
@@ -807,7 +813,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasLongContextBillingUpdate {
+	if len(input.Credentials) > 0 || len(input.Extra) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasLongContextBillingUpdate {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -833,6 +839,30 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			if acc != nil && acc.IsCredentialShadow() {
 				return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_NO_CREDENTIALS",
 					"spark shadow account %d cannot hold credentials; manage credentials on the parent account", acc.ID)
+			}
+		}
+	}
+	if len(input.Credentials) > 0 || len(input.Extra) > 0 {
+		for _, account := range cachedTargets {
+			if account == nil {
+				continue
+			}
+			credentials := make(map[string]any, len(account.Credentials)+len(input.Credentials))
+			for key, value := range account.Credentials {
+				credentials[key] = value
+			}
+			for key, value := range input.Credentials {
+				credentials[key] = value
+			}
+			extra := make(map[string]any, len(account.Extra)+len(input.Extra))
+			for key, value := range account.Extra {
+				extra[key] = value
+			}
+			for key, value := range input.Extra {
+				extra[key] = value
+			}
+			if err := s.validateQingyunAccountEndpoints(ctx, account.Type, credentials, extra); err != nil {
+				return nil, err
 			}
 		}
 	}

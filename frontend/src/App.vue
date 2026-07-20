@@ -17,6 +17,7 @@ const subscriptionStore = useSubscriptionStore()
 const announcementStore = useAnnouncementStore()
 const adminComplianceStore = useAdminComplianceStore()
 const adminSettingsStore = useAdminSettingsStore()
+let publicSettingsSyncTimer: number | undefined
 
 function updateDocumentTitle() {
   const customMenuItems = [
@@ -127,6 +128,7 @@ router.afterEach(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibilityChange)
   window.removeEventListener('admin-compliance-required', onAdminComplianceRequired)
+  if (publicSettingsSyncTimer) window.clearInterval(publicSettingsSyncTimer)
 })
 
 onMounted(async () => {
@@ -145,6 +147,9 @@ onMounted(async () => {
 
   // Load public settings into appStore (will be cached for other components)
   await appStore.fetchPublicSettings()
+  publicSettingsSyncTimer = window.setInterval(() => {
+    appStore.fetchPublicSettings(true)
+  }, 30_000)
 
   // Re-resolve document title now that site settings are available
   updateDocumentTitle()
