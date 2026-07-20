@@ -131,6 +131,7 @@ type SystemSettings struct {
 
 	SiteName                    string
 	SiteLogo                    string
+	UIStyle                     string
 	SiteSubtitle                string
 	APIBaseURL                  string
 	ContactInfo                 string
@@ -291,6 +292,7 @@ type PublicSettings struct {
 	TurnstileSiteKey                 string
 	SiteName                         string
 	SiteLogo                         string
+	UIStyle                          string
 	SiteSubtitle                     string
 	APIBaseURL                       string
 	ContactInfo                      string

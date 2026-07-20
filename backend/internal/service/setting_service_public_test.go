@@ -78,6 +78,23 @@ func TestSettingService_GetPublicSettings_ExposesTablePreferences(t *testing.T) 
 	require.Equal(t, []int{20, 50, 100}, settings.TablePageSizeOptions)
 }
 
+func TestSettingService_GetPublicSettings_ExposesNormalizedUIStyle(t *testing.T) {
+	svc := NewSettingService(&settingPublicRepoStub{values: map[string]string{
+		SettingKeyUIStyle: "ocean",
+	}}, &config.Config{})
+
+	settings, err := svc.GetPublicSettings(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "ocean", settings.UIStyle)
+
+	svc = NewSettingService(&settingPublicRepoStub{values: map[string]string{
+		SettingKeyUIStyle: "not-a-theme",
+	}}, &config.Config{})
+	settings, err = svc.GetPublicSettings(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, DefaultUIStyle, settings.UIStyle)
+}
+
 func TestSettingService_GetPublicSettings_ExposesForceEmailOnThirdPartySignup(t *testing.T) {
 	repo := &settingPublicRepoStub{
 		values: map[string]string{

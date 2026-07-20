@@ -14,7 +14,8 @@ function initThemeClass() {
     savedTheme === 'dark' ||
     (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
   document.documentElement.classList.toggle('dark', shouldUseDark)
-  applyUiStyle(readStoredUiStyle())
+  const configuredStyle = window.__APP_CONFIG__?.ui_style
+  applyUiStyle(configuredStyle || readStoredUiStyle())
 }
 
 async function bootstrap() {

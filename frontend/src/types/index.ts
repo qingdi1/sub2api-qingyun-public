@@ -206,6 +206,7 @@ export interface PublicSettings {
   turnstile_site_key: string
   site_name: string
   site_logo: string
+  ui_style: string
   site_subtitle: string
   api_base_url: string
   contact_info: string

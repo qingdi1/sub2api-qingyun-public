@@ -28,6 +28,7 @@ function createPublicSettings(overrides: Partial<PublicSettings> = {}): PublicSe
     turnstile_site_key: '',
     site_name: 'Test Site',
     site_logo: '',
+    ui_style: 'classic',
     site_subtitle: '',
     api_base_url: '',
     contact_info: '',
@@ -69,7 +70,7 @@ vi.mock('@/api/auth', () => ({
   getPublicSettings: vi.fn(),
 }))
 
-describe('useAppStore', () => {
+  describe('useAppStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.useFakeTimers()
@@ -297,6 +298,20 @@ describe('useAppStore', () => {
       expect(store.loading).toBe(false)
       expect(store.toasts).toHaveLength(1)
       expect(store.toasts[0].type).toBe('error')
+    })
+  })
+
+  describe('public theme synchronization', () => {
+    it('applies the UI style returned by public settings', async () => {
+      vi.mocked(getPublicSettings).mockResolvedValue(
+        createPublicSettings({ ui_style: 'ocean' }),
+      )
+      const store = useAppStore()
+
+      await store.fetchPublicSettings(true)
+
+      expect(store.cachedPublicSettings?.ui_style).toBe('ocean')
+      expect(document.documentElement.dataset.uiStyle).toBe('ocean')
     })
   })
 
