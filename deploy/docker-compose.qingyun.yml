@@ -38,8 +38,10 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:?TOTP_ENCRYPTION_KEY is required}
       TZ: ${TZ:-Asia/Shanghai}
-      SECURITY_URL_ALLOWLIST_ENABLED: "false"
-      SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP: "false"
+      SECURITY_URL_ALLOWLIST_ENABLED: ${SECURITY_URL_ALLOWLIST_ENABLED:-false}
+      # Qingyun provider endpoints may use either HTTP or HTTPS. Operators can
+      # still set this to false in .env.qingyun to require HTTPS only.
+      SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP: ${SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP:-true}
       SECURITY_URL_ALLOW_PRIVATE_HOSTS: "true"
       UPDATE_DEPLOYMENT_MODE: docker-agent
       UPDATE_DOCKER_AGENT_URL: http://qingyun-update-agent:8787/v1/update
