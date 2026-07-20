@@ -219,8 +219,8 @@ jobs:
             --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
             --label "org.opencontainers.image.version=${VERSION}" \
             --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
-            --label "org.opencontainers.image.title=Qingyun Sub2API Update Agent" \
-            --label "org.opencontainers.image.description=Private Docker update and rollback agent for Qingyun Sub2API" \
+            --label "org.opencontainers.image.title=青云 Sub2API 更新代理" \
+            --label "org.opencontainers.image.description=青云 Sub2API 专用的 Docker 更新与回滚代理" \
             --label "org.opencontainers.image.licenses=LGPL-3.0-or-later" \
             --push \
             .
@@ -267,7 +267,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ secrets.DOCKERHUB_USERNAME }}/sub2api
-          short-description: "Sub2API - AI API Gateway Platform"
+          short-description: "青云 Sub2API - AI API 中转与管理平台"
           readme-filepath: ./deploy/DOCKER.md
 
       # Send Telegram notification
