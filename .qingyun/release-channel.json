@@ -1,4 +1,10 @@
 {
   "schema_version": 1,
-  "releases": []
+  "releases": [
+    {
+      "version": "0.1.158-qingyun.7",
+      "published_at": "2026-07-20T16:29:52Z",
+      "image_digest": "sha256:4bafd7b5d12bc7b751d980ba96bd96bdc9ef948df5b95fe03e3ef5927715e7a0"
+    }
+  ]
 }
