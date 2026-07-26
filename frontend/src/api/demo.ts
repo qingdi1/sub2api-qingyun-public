@@ -75,6 +75,7 @@ const DEMO_GROUP: Group = {
   fallback_group_id: null,
   fallback_group_id_on_invalid_request: null,
   allow_messages_dispatch: false,
+	allow_live: false,
   default_mapped_model: '',
   require_oauth_only: false,
   require_privacy_set: false,
