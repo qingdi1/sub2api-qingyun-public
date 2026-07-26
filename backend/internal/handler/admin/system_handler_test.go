@@ -18,19 +18,22 @@ import (
 )
 
 type systemHandlerUpdateServiceStub struct {
-	performErr           error
-	performResult        *service.UpdateResult
-	updateInfo           *service.UpdateInfo
-	checkErr             error
-	checkForces          []bool
-	performCall          int
-	rollbackCall         int
-	rollbackToCall       int
-	rollbackToVersions   []string
-	rollbackToErr        error
-	rollbackVersions     []service.RollbackVersion
-	rollbackVersionsErr  error
-	rollbackVersionsCall int
+	performErr            error
+	updateInfo            *service.UpdateInfo
+	checkErr              error
+	checkForces           []bool
+	performCall           int
+	performCtxErr         error
+	performHasDeadline    bool
+	rollbackCall          int
+	rollbackToCall        int
+	rollbackToCtxErr      error
+	rollbackToHasDeadline bool
+	rollbackToVersions    []string
+	rollbackToErr         error
+	rollbackVersions      []service.RollbackVersion
+	rollbackVersionsErr   error
+	rollbackVersionsCall  int
 }
 
 func (s *systemHandlerUpdateServiceStub) CheckUpdate(_ context.Context, force bool) (*service.UpdateInfo, error) {
@@ -38,9 +41,11 @@ func (s *systemHandlerUpdateServiceStub) CheckUpdate(_ context.Context, force bo
 	return s.updateInfo, s.checkErr
 }
 
-func (s *systemHandlerUpdateServiceStub) PerformUpdate(context.Context) (*service.UpdateResult, error) {
+func (s *systemHandlerUpdateServiceStub) PerformUpdate(ctx context.Context) error {
 	s.performCall++
-	return s.performResult, s.performErr
+	s.performCtxErr = ctx.Err()
+	_, s.performHasDeadline = ctx.Deadline()
+	return s.performErr
 }
 
 func (s *systemHandlerUpdateServiceStub) Rollback() error {
@@ -53,30 +58,12 @@ func (s *systemHandlerUpdateServiceStub) ListRollbackVersions(context.Context) (
 	return s.rollbackVersions, s.rollbackVersionsErr
 }
 
-func (s *systemHandlerUpdateServiceStub) RollbackToVersion(_ context.Context, version string) error {
+func (s *systemHandlerUpdateServiceStub) RollbackToVersion(ctx context.Context, version string) error {
 	s.rollbackToCall++
+	s.rollbackToCtxErr = ctx.Err()
+	_, s.rollbackToHasDeadline = ctx.Deadline()
 	s.rollbackToVersions = append(s.rollbackToVersions, version)
 	return s.rollbackToErr
-}
-
-type systemHandlerDockerRollbackStub struct {
-	*systemHandlerUpdateServiceStub
-	rollbackResult    *service.UpdateResult
-	rollbackResultErr error
-}
-
-type systemHandlerDockerStatusStub struct {
-	*systemHandlerUpdateServiceStub
-	status    *service.DockerUpdateAgentStatus
-	statusErr error
-}
-
-func (s *systemHandlerDockerStatusStub) GetDockerUpdateStatus(context.Context) (*service.DockerUpdateAgentStatus, error) {
-	return s.status, s.statusErr
-}
-
-func (s *systemHandlerDockerRollbackStub) RollbackToVersionResult(context.Context, string) (*service.UpdateResult, error) {
-	return s.rollbackResult, s.rollbackResultErr
 }
 
 type systemUpdateResponseEnvelope struct {
@@ -87,22 +74,16 @@ type systemUpdateResponseEnvelope struct {
 		AlreadyUpToDate bool   `json:"already_up_to_date"`
 		CurrentVersion  string `json:"current_version"`
 		LatestVersion   string `json:"latest_version"`
-		NeedRestart     bool   `json:"need_restart"`
-		Queued          bool   `json:"queued"`
-		TargetVersion   string `json:"target_version"`
-		DeliveryMode    string `json:"delivery_mode"`
 		OperationID     string `json:"operation_id"`
 	} `json:"data"`
 }
 
 type systemUpdateErrorEnvelope struct {
-	Code     int               `json:"code"`
-	Message  string            `json:"message"`
-	Reason   string            `json:"reason"`
-	Metadata map[string]string `json:"metadata"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
 }
 
-func newSystemHandlerTestRouter(t *testing.T, updateSvc systemUpdateService, repo *memoryIdempotencyRepoStub) *gin.Engine {
+func newSystemHandlerTestRouter(t *testing.T, updateSvc *systemHandlerUpdateServiceStub, repo *memoryIdempotencyRepoStub) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	service.SetDefaultIdempotencyCoordinator(nil)
@@ -119,7 +100,6 @@ func newSystemHandlerTestRouter(t *testing.T, updateSvc systemUpdateService, rep
 	router := gin.New()
 	router.POST("/api/v1/admin/system/update", handler.PerformUpdate)
 	router.POST("/api/v1/admin/system/rollback", handler.Rollback)
-	router.GET("/api/v1/admin/system/update-status", handler.GetUpdateStatus)
 	router.GET("/api/v1/admin/system/rollback-versions", handler.GetRollbackVersions)
 	return router
 }
@@ -193,63 +173,53 @@ func TestSystemHandlerPerformUpdateFailureStillReturnsInternalError(t *testing.T
 	require.Equal(t, "internal error", body.Message)
 }
 
-func TestSystemHandlerPerformUpdateReturnsQueuedDockerResult(t *testing.T) {
-	updateSvc := &systemHandlerUpdateServiceStub{
-		performResult: &service.UpdateResult{
-			Message:       "update accepted",
-			NeedRestart:   false,
-			Queued:        true,
-			TargetVersion: "0.1.159-qingyun.7",
-			DeliveryMode:  service.UpdateDeploymentModeDockerAgent,
-		},
-	}
+// TestSystemHandlerPerformUpdateSurvivesClientDisconnect reproduces #4504:
+// the browser or a reverse proxy (axios 30s default, nginx proxy_read_timeout
+// 60s) aborts the long-running update request and cancels the request
+// context. The download must keep running on a detached, bounded context
+// instead of dying with "download failed: context canceled".
+func TestSystemHandlerPerformUpdateSurvivesClientDisconnect(t *testing.T) {
+	updateSvc := &systemHandlerUpdateServiceStub{}
 	repo := newMemoryIdempotencyRepoStub()
 	router := newSystemHandlerTestRouter(t, updateSvc, repo)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/update", nil)
-	req.Header.Set("Idempotency-Key", "docker-queued")
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req = req.WithContext(canceledCtx)
+	req.Header.Set("Idempotency-Key", "disconnected-update")
 	router.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, 1, updateSvc.performCall)
+	require.NoError(t, updateSvc.performCtxErr,
+		"update must not observe the canceled request context")
+	require.True(t, updateSvc.performHasDeadline,
+		"detached update context must still be bounded by a deadline")
 	requireSystemLockStatus(t, repo, service.IdempotencyStatusSucceeded)
-
-	var body systemUpdateResponseEnvelope
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	require.Equal(t, "update accepted", body.Data.Message)
-	require.True(t, body.Data.Queued)
-	require.False(t, body.Data.NeedRestart)
-	require.Equal(t, "0.1.159-qingyun.7", body.Data.TargetVersion)
-	require.Equal(t, service.UpdateDeploymentModeDockerAgent, body.Data.DeliveryMode)
-	require.NotEmpty(t, body.Data.OperationID)
 }
 
-func TestSystemHandlerPerformUpdateReturnsStructuredDockerDeliveryConflict(t *testing.T) {
-	updateSvc := &systemHandlerUpdateServiceStub{
-		performErr: service.ErrDockerUpdateManualRequired.WithMetadata(map[string]string{
-			"delivery_mode":  service.UpdateDeploymentModeDockerManual,
-			"target_version": "0.1.159-qingyun.7",
-		}),
-	}
+func TestSystemHandlerRollbackToVersionSurvivesClientDisconnect(t *testing.T) {
+	updateSvc := &systemHandlerUpdateServiceStub{}
 	repo := newMemoryIdempotencyRepoStub()
 	router := newSystemHandlerTestRouter(t, updateSvc, repo)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/update", nil)
-	req.Header.Set("Idempotency-Key", "docker-manual")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/rollback",
+		strings.NewReader(`{"version":"0.1.146"}`))
+	req.Header.Set("Content-Type", "application/json")
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req = req.WithContext(canceledCtx)
+	req.Header.Set("Idempotency-Key", "disconnected-rollback")
 	router.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusConflict, rec.Code)
-	require.Equal(t, 1, updateSvc.performCall)
-	requireSystemLockStatus(t, repo, service.IdempotencyStatusFailedRetryable)
-
-	var body systemUpdateErrorEnvelope
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	require.Equal(t, http.StatusConflict, body.Code)
-	require.Equal(t, "UPDATE_DELIVERY_MANUAL_REQUIRED", body.Reason)
-	require.Equal(t, service.UpdateDeploymentModeDockerManual, body.Metadata["delivery_mode"])
-	require.Equal(t, "0.1.159-qingyun.7", body.Metadata["target_version"])
+	require.Equal(t, 1, updateSvc.rollbackToCall)
+	require.NoError(t, updateSvc.rollbackToCtxErr,
+		"versioned rollback must not observe the canceled request context")
+	require.True(t, updateSvc.rollbackToHasDeadline,
+		"detached rollback context must still be bounded by a deadline")
+	requireSystemLockStatus(t, repo, service.IdempotencyStatusSucceeded)
 }
 
 func TestSystemHandlerRollbackWithoutBodyUsesLegacyBackup(t *testing.T) {
@@ -290,39 +260,6 @@ func TestSystemHandlerRollbackWithVersionCallsRollbackToVersion(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, 0, body.Code)
 	require.Equal(t, "Rollback completed. Please restart the service.", body.Data.Message)
-}
-
-func TestSystemHandlerRollbackReturnsQueuedDockerResult(t *testing.T) {
-	updateSvc := &systemHandlerDockerRollbackStub{
-		systemHandlerUpdateServiceStub: &systemHandlerUpdateServiceStub{},
-		rollbackResult: &service.UpdateResult{
-			Message:       "rollback accepted",
-			NeedRestart:   false,
-			Queued:        true,
-			TargetVersion: "0.1.158-qingyun.1",
-			DeliveryMode:  service.UpdateDeploymentModeDockerAgent,
-		},
-	}
-	repo := newMemoryIdempotencyRepoStub()
-	router := newSystemHandlerTestRouter(t, updateSvc, repo)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/rollback",
-		strings.NewReader(`{"version":"0.1.158-qingyun.1"}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Idempotency-Key", "docker-rollback-queued")
-	router.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	requireSystemLockStatus(t, repo, service.IdempotencyStatusSucceeded)
-
-	var body systemUpdateResponseEnvelope
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	require.Equal(t, "rollback accepted", body.Data.Message)
-	require.True(t, body.Data.Queued)
-	require.False(t, body.Data.NeedRestart)
-	require.Equal(t, "0.1.158-qingyun.1", body.Data.TargetVersion)
-	require.Equal(t, service.UpdateDeploymentModeDockerAgent, body.Data.DeliveryMode)
 }
 
 func TestSystemHandlerRollbackWithDisallowedVersionReturnsBadRequest(t *testing.T) {
@@ -384,32 +321,4 @@ func TestSystemHandlerGetRollbackVersionsError(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
-}
-
-func TestSystemHandlerGetDockerUpdateStatus(t *testing.T) {
-	updateSvc := &systemHandlerDockerStatusStub{
-		systemHandlerUpdateServiceStub: &systemHandlerUpdateServiceStub{},
-		status: &service.DockerUpdateAgentStatus{
-			State:         "pulling",
-			Operation:     "update",
-			TargetVersion: "0.1.159-qingyun.7",
-			Message:       "Downloading the requested image.",
-		},
-	}
-	repo := newMemoryIdempotencyRepoStub()
-	router := newSystemHandlerTestRouter(t, updateSvc, repo)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/system/update-status", nil)
-	router.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	var body struct {
-		Code int                             `json:"code"`
-		Data service.DockerUpdateAgentStatus `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	require.Equal(t, 0, body.Code)
-	require.Equal(t, "pulling", body.Data.State)
-	require.Equal(t, "0.1.159-qingyun.7", body.Data.TargetVersion)
 }

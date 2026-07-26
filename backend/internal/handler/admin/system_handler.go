@@ -22,6 +22,18 @@ type SystemHandler struct {
 	lockSvc   *service.SystemOperationLockService
 }
 
+const systemUpdateTimeout = 15 * time.Minute
+
+// systemUpdateContext keeps long-running downloads alive after a browser or
+// reverse proxy closes the request while retaining a bounded deadline.
+func systemUpdateContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	base := context.Background()
+	if ctx != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	return context.WithTimeout(base, systemUpdateTimeout)
+}
+
 type systemUpdateService interface {
 	CheckUpdate(ctx context.Context, force bool) (*service.UpdateInfo, error)
 	PerformUpdate(ctx context.Context) (*service.UpdateResult, error)
@@ -106,7 +118,9 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 			release(releaseReason, succeeded)
 		}()
 
-		result, err := h.updateSvc.PerformUpdate(ctx)
+		updateCtx, cancel := systemUpdateContext(ctx)
+		defer cancel()
+		result, err := h.updateSvc.PerformUpdate(updateCtx)
 		if err != nil {
 			if errors.Is(err, service.ErrNoUpdateAvailable) {
 				info, checkErr := h.updateSvc.CheckUpdate(ctx, false)
@@ -193,9 +207,13 @@ func (h *SystemHandler) Rollback(c *gin.Context) {
 		var rollbackResult *service.UpdateResult
 		if targetVersion != "" {
 			if resultService, ok := h.updateSvc.(systemRollbackResultService); ok {
-				rollbackResult, err = resultService.RollbackToVersionResult(ctx, targetVersion)
+				rollbackCtx, cancel := systemUpdateContext(ctx)
+				defer cancel()
+				rollbackResult, err = resultService.RollbackToVersionResult(rollbackCtx, targetVersion)
 			} else {
-				err = h.updateSvc.RollbackToVersion(ctx, targetVersion)
+				rollbackCtx, cancel := systemUpdateContext(ctx)
+				defer cancel()
+				err = h.updateSvc.RollbackToVersion(rollbackCtx, targetVersion)
 			}
 		} else {
 			err = h.updateSvc.Rollback()
